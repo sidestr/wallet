@@ -40,7 +40,7 @@ const mirror = (q.get('mirror') ?? LS.get('sidestr_mirror') ?? '').replace(/\/+$
 const overrides = Object.fromEntries(['lib', 'cdn', 'explorer'].filter((k) => q.get(k)).map((k) => [k, q.get(k)]));
 const EXPLORER_UI = q.get('explorer-ui') ?? 'https://sidestr.com/explorer/';
 const $ = (id) => document.getElementById(id), esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const sats = (n) => n.toLocaleString('en-US'), coins = (n) => (n / 1e8).toLocaleString('en-US', { maximumFractionDigits: 8 });
+const sats = (n) => n.toLocaleString('en-US');
 const app = $('app'); let w = null, key = null, me = null, relays = [];
 const explore = (kind, id) => `${EXPLORER_UI}?mirror=${encodeURIComponent(mirror)}#/${kind}/${id}`;
 
@@ -68,8 +68,8 @@ function render() {
     <p class="muted" style="margin-bottom:0">The key is stored unencrypted in this browser's storage, like the BLAKE wallet does. Small amounts. Back it up below once it exists.</p></section>`, setKeyHandlers());
   me = w.identity(key); const bal = w.balance(me.script), cs = w.coins(me.script), hist = w.history(me.script).slice(0, 30);
   app.innerHTML = `
-<section><h2>balance</h2><div class="big">${coins(bal.spendable)}<small>coins spendable</small></div>
-  ${bal.immature ? `<div class="muted">+ ${coins(bal.immature)} immature (coinbase, ${w.ex.k.params.coinbaseMaturity} confirmations)</div>` : ''}
+<section><h2>balance</h2><div class="big">${sats(bal.spendable)}<small>sats spendable</small></div>
+  ${bal.immature ? `<div class="muted">+ ${sats(bal.immature)} sats immature (coinbase, ${w.ex.k.params.coinbaseMaturity} confirmations)</div>` : ''}
   <div class="dim" style="margin-top:.3rem">${cs.length} coin${cs.length === 1 ? '' : 's'} · <a href="${explore('address', me.address)}" target="_blank" rel="noopener">this address on the explorer ↗</a></div></section>
 <section><h2>receive</h2><div class="addr mono" id="addr">${esc(me.address)}</div>
   <div class="row" style="margin-top:.5rem"><button id="copy">copy address</button><span class="dim">script <code>${esc(me.script.slice(0, 12))}…</code></span></div></section>
