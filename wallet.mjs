@@ -58,6 +58,12 @@ export class Wallet {
     return out.sort((a, b) => a.height - b.height || a.vout - b.vout);
   }
   balance(script) { let spendable = 0, immature = 0; for (const c of this.coins(script)) { if (c.mature) spendable += c.value; else immature += c.value; } return { spendable, immature, total: spendable + immature }; }
+  // where the parent's coins can be seen (a public explorer per parent network)
+  parentExplorer() { const p = this.chain.parent ?? ''; if (/testnet4/.test(p)) return 'https://mempool.guide/testnet4'; if (/mainnet/.test(p)) return 'https://mempool.guide'; return null; }
+  parentTxUrl(txid) { const b = this.parentExplorer(); return b ? `${b}/tx/${txid}` : null; }
+  parentAddressUrl(address) { const b = this.parentExplorer(); return b ? `${b}/address/${address}` : null; }
+  // the mirror's record of paid burns: `${txid}:${vout}` -> { parentTxid, address, value, ... }
+  async pegoutsPaid() { try { const r = await fetch(`${this.mirror}/pegouts.json`, { cache: 'no-store' }); return r.ok ? (await r.json()).paid ?? {} : {}; } catch { return {}; } }
   history(script) { const a = this.ex.byScript.get(script); return [...(a?.outputs ?? []).map((o) => ({ ...o, dir: 'in' })), ...(a?.spends ?? []).map((s) => ({ ...s, dir: 'out' }))].sort((x, y) => y.height - x.height); }
   // a destination is a script hex or a segwit address under any prefix: the script is what is paid
   resolveTo(to) {
