@@ -27,6 +27,11 @@ const back = w.ex.k.codec.decode('Transaction', b.hex); t('hex round-trips throu
 t('a tb1p address is accepted with a note', /prefix "tb"/.test(w.resolveTo('tb1pxklu7cthjnc7yvzpelag24p0906sgsxzedlrkd67sv7xtlraupysz3sv9t').note ?? ''));
 t('a bad address is refused', (() => { try { w.resolveTo('ts1pnope'); return false; } catch { return true; } })());
 t('overspend is refused', (() => { try { w.build({ key, to, amount: 1e15 }); return false; } catch (e) { return /not enough/.test(e.message); } })());
+if (args.faucet) { // a fresh key asks the faucet through the wallet's own path and waits for the mirror
+  const fresh = w.newKey(), who = w.identity(fresh); const r = await w.requestFaucet(who.address); console.log('  faucet request', r.event.slice(0, 16) + '…', JSON.stringify(r.results)); t('a relay took the request', r.accepted);
+  let got = null; for (let i = 0; i < 18 && !got; i++) { await new Promise((res) => setTimeout(res, 10000)); await w.refresh(); const b = w.balance(who.script); if (b.total > 0) got = b; }
+  t(`the faucet paid the fresh wallet (${got ? got.total + ' sats' : 'nothing after 3 min'})`, !!got);
+}
 if (args.send) {
   const r = await w.publish(b.hex); console.log('  published', r.event.slice(0, 16) + '…', JSON.stringify(r.results)); t('a relay accepted the event', r.accepted);
   for (let i = 0; i < 18; i++) { await new Promise((res) => setTimeout(res, 10000)); const m = await w.mined(b.txid); if (m) { console.log(`  mined in block ${m.height} (seen on the mirror after ${(i + 1) * 10} s)`); t('mined', true); process.exit(process.exitCode ?? 0); } }

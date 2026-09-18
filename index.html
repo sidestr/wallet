@@ -70,7 +70,8 @@ function render() {
   app.innerHTML = `
 <section><h2>balance</h2><div class="big">${sats(bal.spendable)}<small>sats spendable</small></div>
   ${bal.immature ? `<div class="muted">+ ${sats(bal.immature)} sats immature (coinbase, ${w.ex.k.params.coinbaseMaturity} confirmations)</div>` : ''}
-  <div class="dim" style="margin-top:.3rem">${cs.length} coin${cs.length === 1 ? '' : 's'} · <a href="${explore('address', me.address)}" target="_blank" rel="noopener">this address on the explorer ↗</a></div></section>
+  <div class="dim" style="margin-top:.3rem">${cs.length} coin${cs.length === 1 ? '' : 's'} · <a href="${explore('address', me.address)}" target="_blank" rel="noopener">this address on the explorer ↗</a></div>
+  ${bal.total === 0 ? `<div class="row" style="margin-top:.7rem"><button class="ac" id="faucet">get test coins</button><span class="muted" id="faucetout">asks a faucet on the relay; coins arrive in a few seconds if one is listening</span></div>` : ''}</section>
 <section><h2>receive</h2><div class="addr mono" id="addr">${esc(me.address)}</div>
   <div class="row" style="margin-top:.5rem"><button id="copy">copy address</button><span class="dim">script <code>${esc(me.script.slice(0, 12))}…</code></span></div></section>
 <section><h2>send</h2>
@@ -87,6 +88,10 @@ function render() {
   <details style="margin-top:.4rem"><summary class="bad">danger zone</summary><p class="muted">Forget the key in this browser. Without a backup the coins are gone.</p><button class="danger" id="forget1">forget this key</button> <button class="danger hidden" id="forget2">yes, forget it</button></details></section>`;
   setKeyHandlers(); $('copy').onclick = async () => { try { await navigator.clipboard.writeText(me.address); $('copy').textContent = 'copied'; setTimeout(() => $('copy').textContent = 'copy address', 1500); } catch {} };
   $('send').onclick = send;
+  if ($('faucet')) $('faucet').onclick = async () => { const b = $('faucet'), o = $('faucetout'); b.disabled = true; o.textContent = 'asking…';
+    try { const r = await w.requestFaucet(me.address, relays); if (!r.accepted) { o.textContent = 'no relay accepted the request'; b.disabled = false; return; } o.textContent = 'asked; waiting for the coins…';
+      for (let i = 0; i < 12; i++) { await new Promise((res) => setTimeout(res, 5000)); await w.refresh(); if (w.balance(me.script).total > 0) return render(); o.textContent = `asked; waiting for the coins… ${(i + 1) * 5} s`; }
+      o.textContent = 'nothing arrived in a minute: no faucet listening, or its limits; refresh later'; b.disabled = false; } catch (e) { o.textContent = e.message; b.disabled = false; } };
   $('save').onclick = () => { const m = $('mirrorset').value.trim().replace(/\/+$/, ''); LS.set('sidestr_relays', $('relayset').value); if (m && m !== mirror) { LS.set('sidestr_mirror', m); location.search = '?mirror=' + encodeURIComponent(m); } else { relays = $('relayset').value.split(',').map((x) => x.trim()).filter(Boolean); $('save').textContent = 'saved'; setTimeout(() => $('save').textContent = 'save', 1500); } };
   $('forget1').onclick = () => { $('forget2').classList.remove('hidden'); }; $('forget2').onclick = () => { LS.del(`sidestr_key:${w.chain.id}`); key = null; me = null; render(); };
 }

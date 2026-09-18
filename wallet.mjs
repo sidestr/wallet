@@ -5,7 +5,7 @@
 // to a producer; a wallet needs a mirror to read and a relay to send to, and nothing else.
 export const DEFAULTS = {
   cdn: 'https://cdn.jsdelivr.net/gh/bitcoin-desktop/schema@v0.0.27',
-  lib: 'https://cdn.jsdelivr.net/gh/sidestr/spec@dd486f6618cb1f83839c702b92245f36ba4fba82/siding/lib',
+  lib: 'https://cdn.jsdelivr.net/gh/sidestr/spec@da3adb1ac3a3e24e6cc69a297efbdec45eba5c95/siding/lib',
   explorer: 'https://cdn.jsdelivr.net/gh/sidestr/explorer@4fad658fd86be4becf50aa1ed8f46a9cb9f4ba61/explorer.mjs',
   relays: ['wss://nos.lol', 'wss://relay.damus.io'],
 };
@@ -68,6 +68,8 @@ export class Wallet {
   }
   // publish as a kind 23500 event from a throwaway key: the transaction authorises itself
   async publish(hex, relays = DEFAULTS.relays) { const ev = this.events.txEvent(this.signer.randomKey(), this.chain.id, hex); const results = await this.relay.publish({ relays, event: ev }); return { event: ev.id, results, accepted: Object.values(results).some((r) => r === 'ok') }; }
+  // ask a faucet for coins (SPEC 11, kind 23501): the request carries the address; a faucet on the relay answers with a payment
+  async requestFaucet(address, relays = DEFAULTS.relays) { const ev = this.events.signEvent(this.signer.randomKey(), { kind: 23501, tags: [['chain', this.chain.id]], content: address }); const results = await this.relay.publish({ relays, event: ev }); return { event: ev.id, results, accepted: Object.values(results).some((r) => r === 'ok') }; }
   // has a transaction been mined, as far as the mirror knows
   async mined(txid) { await this.refresh(); const t = this.ex.txs.get(txid); return t ? { height: t.height } : null; }
 }
