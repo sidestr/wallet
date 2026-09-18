@@ -85,12 +85,12 @@ export class Wallet {
   // the burn output for a parent address or script (SPEC 7): OP_RETURN `pegout:<script>`
   pegoutScript(to) { const enc = new TextEncoder().encode(`pegout:${this.resolveTo(to).script}`); return '6a' + enc.length.toString(16).padStart(2, '0') + Array.from(enc, (b) => b.toString(16).padStart(2, '0')).join(''); }
   // pegout: `to` is a parent address; the amount burns here and the peg holders owe it there
-  build({ key, to, amount, fee = null, pegout = false, evmDeposit = false }) {
-    const me = this.identity(key); amount = Number(amount);
+  build({ key, to, amount, fee = null, pegout = false, evmDeposit = false, carrier = null }) {
+    const me = this.identity(key); amount = carrier ? 0 : Number(amount);
     if (evmDeposit && !/^0x[0-9a-fA-F]{40}$/.test(String(to).trim())) throw new Error('a deposit goes to a 0x address'); const auto = fee == null || fee === '' || fee === 'auto'; fee = auto ? null : Number(fee);
-    if (!Number.isInteger(amount) || amount <= 0) throw new Error('the amount is a whole number of sats'); if (!auto && (!Number.isInteger(fee) || fee < 0)) throw new Error('bad fee');
+    if (!Number.isInteger(amount) || amount < 0 || (amount === 0 && !carrier)) throw new Error('the amount is a whole number of sats'); if (!auto && (!Number.isInteger(fee) || fee < 0)) throw new Error('bad fee');
     if (pegout && amount < this.pegoutMin) throw new Error(`a peg-out burns at least ${this.pegoutMin.toLocaleString('en-US')} sats`);
-    const dest = evmDeposit ? { script: (this.chain.evm?.reserve ?? this.chain.challenge).toLowerCase(), note: `deposit: ${amount.toLocaleString('en-US')} sats to the reserve, credited as ${amount.toLocaleString('en-US')} gwei to ${String(to).trim()} in the EVM`, extra: this.evmDepositOutputs(String(to).trim(), amount).slice(1) } : pegout ? { script: this.pegoutScript(to), note: `peg-out: ${amount.toLocaleString('en-US')} sats burn on ${this.chain.name} and are owed to ${String(to).trim()} on ${this.chain.parent}; the peg holders pay it there` } : this.resolveTo(to);
+    const dest = carrier ? { script: carrier.script, note: carrier.note ?? null } : evmDeposit ? { script: (this.chain.evm?.reserve ?? this.chain.challenge).toLowerCase(), note: `deposit: ${amount.toLocaleString('en-US')} sats to the reserve, credited as ${amount.toLocaleString('en-US')} gwei to ${String(to).trim()} in the EVM`, extra: this.evmDepositOutputs(String(to).trim(), amount).slice(1) } : pegout ? { script: this.pegoutScript(to), note: `peg-out: ${amount.toLocaleString('en-US')} sats burn on ${this.chain.name} and are owed to ${String(to).trim()} on ${this.chain.parent}; the peg holders pay it there` } : this.resolveTo(to);
     const coins = this.coins(me.script).filter((c) => c.mature).sort((a, b) => b.value - a.value);
     const bound = auto ? Math.ceil(this.minFeeRate * 200) : fee; const picked = []; let sum = 0; for (const c of coins) { picked.push(c); sum += c.value; if (sum >= amount + bound) break; }
     if (sum < amount + bound) throw new Error(`not enough mature coins: ${sum} sats available, ${amount + bound} needed`);
@@ -108,6 +108,72 @@ export class Wallet {
     return tx.inputs.every((_, i) => { let m = k.interpreter.sighashUnified(tx, i, prevouts, ht, 2); if (typeof m === 'string') m = h.hexToBytes(m); const w = tx.witness[i][0]; return w.endsWith(ht.toString(16).padStart(2, '0')) && this.secp.verifySchnorr(m, h.hexToBytes(w.slice(0, 128)), h.hexToBytes(pub)); });
   }
   // publish as a kind 23500 event from a throwaway key: the transaction authorises itself
+  // --- EVM transactions from the page (proposals/evm.md): the same key signs an Ethereum transaction,
+  //     which rides inside a sidestr transaction as a carrier (OP_RETURN "evm:" + RLP) paid from my
+  //     sats. Every step runs against the page's own validated state first -- a dry run on a
+  //     checkpoint that is reverted -- so nothing leaves the machine that a validator would refuse.
+  //     No RPC: the carrier goes to the relays like any spend; reads come from the state here. ------
+  async #evmLib() { const e = this.evm; if (!e) throw new Error('this chain has no evm rule'); if (!e.ready) await e.init(); if (!this._evmMod) this._evmMod = await import(`${this.lib}/overlays/evm.mjs`); return { e, ...e.lib, mod: this._evmMod }; }
+  #addr(a, util) { a = String(a ?? '').trim(); if (!/^0x[0-9a-fA-F]{40}$/.test(a)) throw new Error(`"${a.slice(0, 20)}" is not a 0x address`); return util.createAddressFromString(a.toLowerCase()); }
+  #hexb(b) { return '0x' + Array.from(b, (x) => x.toString(16).padStart(2, '0')).join(''); }
+  #data(d) { d = String(d ?? '').trim().replace(/^0x/i, ''); if (d.length % 2 || !/^[0-9a-f]*$/i.test(d)) throw new Error('data is hex'); return Uint8Array.from(d.match(/../g) ?? [], (x) => parseInt(x, 16)); }
+  async evmNonce(address) { const { e, util } = await this.#evmLib(); return (await e.vm.stateManager.getAccount(this.#addr(address, util)))?.nonce ?? 0n; }
+  async evmCode(address) { const { e, util } = await this.#evmLib(); return this.#hexb(await e.vm.stateManager.getCode(this.#addr(address, util))); }
+  // a call that changes nothing (eth_call; value in gwei): run on a checkpoint, then reverted. { ok, returnValue, gasUsed, error, createdAddress }
+  async evmCall({ from = null, to = null, value = 0n, data = '0x', gasLimit = null } = {}) {
+    const { e, util, mod } = await this.#evmLib(); await e.vm.stateManager.checkpoint();
+    try { const r = await e.vm.evm.runCall({ to: to ? this.#addr(to, util) : undefined, caller: from ? this.#addr(from, util) : util.createZeroAddress(), value: BigInt(value) * mod.GWEI, data: this.#data(data), gasLimit: gasLimit ? BigInt(gasLimit) : e.gasLimit });
+      const x = r.execResult.exceptionError; return { ok: !x, error: x ? `${x.error}${r.execResult.returnValue?.length ? ' ' + this.#revertReason(r.execResult.returnValue) : ''}` : null, returnValue: this.#hexb(r.execResult.returnValue ?? new Uint8Array()), gasUsed: r.execResult.executionGasUsed, createdAddress: r.createdAddress ? r.createdAddress.toString() : null }; }
+    finally { await e.vm.stateManager.revert(); }
+  }
+  #revertReason(rv) { const h = this.#hexb(rv); if (h.startsWith('0x08c379a0') && rv.length >= 68) { try { return `"${this.abi.decodeString('0x' + h.slice(10))}"`; } catch {} } return h.length > 2 ? h.slice(0, 20) + '…' : ''; }
+  // the producer's estimate, so a page and the RPC agree: intrinsic gas + calldata + execution with a fifth of headroom
+  async evmEstimate(call) { const r = await this.evmCall(call); if (!r.ok) throw new Error(`the call reverts: ${r.error}`); const d = this.#data(call.data); const calldata = [...d].reduce((a, b) => a + (b === 0 ? 4 : 16), 0); return 21000n + (call.to ? 0n : 32000n) + BigInt(calldata) + r.gasUsed * 12n / 10n; }
+  // sign an Ethereum transaction with my key (value in gwei = sats), carry it in a sidestr transaction from my mature coins, and dry-run the whole thing on this page's state
+  async buildEvm({ key, to = null, value = 0, data = '0x', gasLimit = null, nonce = null, fee = null, note = null }) {
+    const { e, util, tx: T, mod } = await this.#evmLib(); const priv = util.hexToBytes('0x' + key.toLowerCase()); const from = this.ethAddress(key);
+    value = BigInt(value); if (value < 0n) throw new Error('the value is a whole number of gwei'); if (to !== null) this.#addr(to, util); const bytes = this.#data(data); if (to === null && !bytes.length) throw new Error('a deployment needs the contract\'s init code as data');
+    const bal = await this.evmBalance(from); if (bal < (value + 21000n) * mod.GWEI) throw new Error(`the EVM balance of ${from.slice(0, 10)}… is ${(bal / mod.GWEI).toLocaleString('en-US')} gwei; ${value.toLocaleString('en-US')} gwei plus gas are needed`);
+    const n = nonce == null || nonce === '' ? await this.evmNonce(from) : BigInt(nonce); const gas = gasLimit ? BigInt(gasLimit) : await this.evmEstimate({ from, to, value, data });
+    const cost = (value + gas) * mod.GWEI; if (bal < cost) throw new Error(`the EVM balance of ${from.slice(0, 10)}… is ${(bal / mod.GWEI).toLocaleString('en-US')} gwei; ${(cost / mod.GWEI).toLocaleString('en-US')} gwei are needed (value + gas × 1 gwei)`);
+    const etx = T.createLegacyTx({ nonce: n, gasPrice: mod.GWEI, gasLimit: gas, to: to ?? undefined, value: value * mod.GWEI, data: bytes }, { common: e.common }).sign(priv); const rlp = etx.serialize(); const hash = this.#hexb(etx.hash());
+    const what = to === null ? `deploy a contract (${bytes.length} bytes of init code)` : value && !bytes.length ? `send ${value.toLocaleString('en-US')} gwei to ${to}` : `call ${to}${value ? ` with ${value.toLocaleString('en-US')} gwei` : ''}`;
+    const b = this.build({ key, fee, carrier: { script: mod.carrierScript(rlp), note: note ?? `${what}: nonce ${n}, gas limit ${gas.toLocaleString('en-US')} at 1 gwei; the Ethereum transaction ${hash.slice(0, 14)}… rides in a sidestr transaction paid from your sats` } });
+    const dry = await e.checkTx(b.tx, b.txid, { height: (this.tip?.height ?? 0) + 1, time: Math.floor(Date.now() / 1000) }); if (!dry.ok) throw new Error(`a validator would refuse it: ${dry.error}`);
+    return { ...b, ethHash: hash, from, to, value, gasLimit: gas, nonce: n, contractAddress: to === null ? this.#hexb(util.generateAddress(util.hexToBytes(from), util.bigIntToUnpaddedBytes(n))) : null };
+  }
+  // a withdrawal: value to the WITHDRAW address with my sidestr script as the data; the block's coinbase pays floor(value / 1e9) sats to that script
+  async buildWithdraw({ key, sats, fee = null }) { const { mod } = await this.#evmLib(); const me = this.identity(key); sats = Number(sats); if (!Number.isInteger(sats) || sats <= 0) throw new Error('a withdrawal is a whole number of sats'); return this.buildEvm({ key, to: mod.WITHDRAW, value: BigInt(sats), data: '0x' + me.script, fee, note: `withdraw ${sats.toLocaleString('en-US')} gwei from the EVM: the coinbase of the block that carries it pays ${sats.toLocaleString('en-US')} sats to ${me.address}` }); }
+  evmReceipt(hash) { return this.evm?.receipts.get(String(hash).toLowerCase()) ?? null; }
+  // what this address did or received in the EVM, newest first, as this page has validated it
+  evmActivity(address) { const a = String(address).toLowerCase(); const out = []; for (const r of this.evm?.receipts.values() ?? []) if (r.from?.toLowerCase() === a || r.to?.toLowerCase() === a || r.logs?.some(([, topics]) => topics.some((t) => this.#hexb(t).endsWith(a.slice(2))))) out.push(r); return out.sort((x, y) => y.height - x.height); }
+  // just enough ABI for ERC-20: the standard selectors as constants (any other is hashed by the EVM's
+  // own SHA3 opcode, see keccak()), static words, one dynamic string
+  static SELECTORS = { 'name()': '0x06fdde03', 'symbol()': '0x95d89b41', 'decimals()': '0x313ce567', 'totalSupply()': '0x18160ddd', 'balanceOf(address)': '0x70a08231', 'transfer(address,uint256)': '0xa9059cbb', 'approve(address,uint256)': '0x095ea7b3', 'allowance(address,address)': '0xdd62ed3e', 'transferFrom(address,address,uint256)': '0x23b872dd' };
+  // keccak-256 by the EVM itself: CALLDATASIZE PUSH0 PUSH0 CALLDATACOPY CALLDATASIZE PUSH0 SHA3 PUSH0 MSTORE PUSH1 32 PUSH0 RETURN
+  async keccak(bytes) { const { e } = await this.#evmLib(); const r = await e.vm.evm.runCode({ code: Uint8Array.from([0x36, 0x5f, 0x5f, 0x37, 0x36, 0x5f, 0x20, 0x5f, 0x52, 0x60, 0x20, 0x5f, 0xf3]), data: bytes instanceof Uint8Array ? bytes : new TextEncoder().encode(String(bytes)), gasLimit: 1000000n }); if (r.exceptionError) throw new Error(`keccak in the EVM: ${r.exceptionError.error}`); return this.#hexb(r.returnValue); }
+  async selector(sig) { return Wallet.SELECTORS[sig] ?? (await this.keccak(sig)).slice(0, 10); }
+  get abi() {
+    if (this._abi) return this._abi; const w = this; const word = (h) => h.replace(/^0x/, '').padStart(64, '0');
+    return (this._abi = {
+      selector: (sig) => { const x = Wallet.SELECTORS[sig]; if (!x) throw new Error(`no selector known for ${sig}; use await wallet.selector(sig)`); return x; },
+      encode: (sig, ...args) => w._abi.selector(sig) + args.map((a) => typeof a === 'bigint' || typeof a === 'number' ? word(BigInt(a).toString(16)) : word(String(a).toLowerCase())).join(''),
+      decodeUint: (h) => BigInt(h === '0x' ? 0 : h.slice(0, 66)),
+      decodeString: (h) => { const b = w.#data(h); if (b.length === 32) return new TextDecoder().decode(b.subarray(0, b.indexOf(0) < 0 ? 32 : b.indexOf(0))); const off = Number(BigInt('0x' + w.#hexb(b.subarray(0, 32)).slice(2))), len = Number(BigInt('0x' + w.#hexb(b.subarray(off, off + 32)).slice(2))); return new TextDecoder().decode(b.subarray(off + 32, off + 32 + len)); },
+    });
+  }
+  // an ERC-20 as this page's state sees it: { symbol, name, decimals, balance (raw), supply } for one holder
+  async token(contract, holder) {
+    const { util } = await this.#evmLib(); this.#addr(contract, util); if ((await this.evmCode(contract)) === '0x') throw new Error(`no contract at ${contract}`);
+    const call = async (sig, ...args) => { const r = await this.evmCall({ to: contract, data: this.abi.encode(sig, ...args) }); if (!r.ok) throw new Error(`${sig} reverts: ${r.error}`); return r.returnValue; };
+    const str = async (sig) => { try { return this.abi.decodeString(await call(sig)); } catch { return null; } };
+    const dec = this.abi.decodeUint(await call('decimals()')); const balance = holder ? this.abi.decodeUint(await call('balanceOf(address)', holder)) : null;
+    let supply = null; try { supply = this.abi.decodeUint(await call('totalSupply()')); } catch {}
+    return { contract: contract.toLowerCase(), symbol: await str('symbol()'), name: await str('name()'), decimals: Number(dec), balance, supply, format: (raw) => { const d = Number(dec); const s = BigInt(raw).toString().padStart(d + 1, '0'); return d ? `${s.slice(0, -d)}.${s.slice(-d)}`.replace(/\.?0+$/, '') || '0' : s; } };
+  }
+  // amount as a decimal string in the token's units -> raw integer
+  tokenAmount(text, decimals) { const m = /^(\d*)(?:\.(\d*))?$/.exec(String(text).trim()); if (!m || (!m[1] && !m[2])) throw new Error('the amount is a decimal number'); const frac = (m[2] ?? '').padEnd(decimals, '0'); if (frac.length > decimals) throw new Error(`at most ${decimals} decimals`); return BigInt((m[1] || '0') + frac); }
+  async buildTokenTransfer({ key, contract, to, amount, fee = null }) { const { util } = await this.#evmLib(); this.#addr(to, util); const t = await this.token(contract, this.ethAddress(key)); const raw = this.tokenAmount(amount, t.decimals); if (t.balance < raw) throw new Error(`you hold ${t.format(t.balance)} ${t.symbol ?? 'tokens'}`); return this.buildEvm({ key, to: contract, data: this.abi.encode('transfer(address,uint256)', to, raw), fee, note: `send ${t.format(raw)} ${t.symbol ?? 'tokens'} to ${to}: a call to ${contract}` }); }
   // --- the desk (SPEC 6.2): locked parent rewards pledged for sats now ---------------------
   get desk() { return this.chain.pledge ?? null; }
   // my locked rewards as the desk has seen them, with whether each is pledged already
