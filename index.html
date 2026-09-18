@@ -36,32 +36,40 @@ footer { color:var(--dim); font-size:.85rem; text-align:center; padding:1rem }
 <script type="module">
 const q = new URLSearchParams(location.search);
 const LS = { get: (k) => { try { return localStorage.getItem(k); } catch { return null; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch {} }, del: (k) => { try { localStorage.removeItem(k); } catch {} } };
-const mirror = (q.get('mirror') ?? LS.get('sidestr_mirror') ?? '').replace(/\/+$/, '');
+// a chain id alone is enough: the wallet finds a mirror from the signer's announcement on the relays
+const chainId = (q.get('chain') ?? (q.get('mirror') ? '' : LS.get('sidestr_chain')) ?? '').trim();
+let mirror = (q.get('mirror') ?? (chainId ? '' : LS.get('sidestr_mirror')) ?? '').replace(/\/+$/, '');
 const overrides = Object.fromEntries(['lib', 'cdn', 'explorer'].filter((k) => q.get(k)).map((k) => [k, q.get(k)]));
 const EXPLORER_UI = q.get('explorer-ui') ?? 'https://sidestr.com/explorer/';
 const $ = (id) => document.getElementById(id), esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const sats = (n) => n.toLocaleString('en-US');
-const app = $('app'); let w = null, key = null, me = null, relays = [];
-const explore = (kind, id) => `${EXPLORER_UI}?mirror=${encodeURIComponent(mirror)}#/${kind}/${id}`;
+const app = $('app'); let w = null, key = null, me = null, relays = [], verdict = null, busy = false;
+const explore = (kind, id) => `${EXPLORER_UI}?${chainId ? 'chain=' + encodeURIComponent(chainId) : 'mirror=' + encodeURIComponent(mirror)}#/${kind}/${id}`;
 
-if (!mirror) {
-  app.innerHTML = `<section><h2>which chain?</h2><p>This wallet needs a <b>mirror</b>: a URL that serves a sidestr chain's <code>chain.json</code>, <code>blocks.json</code> and <code>blocks.dat</code>. The same one the explorer uses.</p>
+if (!mirror && !chainId) {
+  app.innerHTML = `<section><h2>which chain?</h2><p>Give this wallet a <b>chain id</b>: it asks the relays for the signer's tip announcement, which names the mirrors.</p>
+  <div class="row"><input id="chainin" class="grow mono" placeholder="sidestr:name" value=""><button class="ac" id="chaingo">find</button></div>
+  <p style="margin-top:.8rem">Or a <b>mirror</b>: a URL that serves the chain's <code>chain.json</code>, <code>blocks.json</code> and <code>blocks.dat</code>. The same one the explorer uses.</p>
   <div class="row"><input id="mirrorin" class="grow mono" placeholder="https://…/siding" value=""><button class="ac" id="mirrorgo">open</button></div></section>`;
-  $('mirrorgo').onclick = () => { const v = $('mirrorin').value.trim().replace(/\/+$/, ''); if (v) { LS.set('sidestr_mirror', v); location.search = '?mirror=' + encodeURIComponent(v); } };
+  $('mirrorgo').onclick = () => { const v = $('mirrorin').value.trim().replace(/\/+$/, ''); if (v) { LS.set('sidestr_mirror', v); LS.del('sidestr_chain'); location.search = '?mirror=' + encodeURIComponent(v); } };
+  $('chaingo').onclick = () => { const v = $('chainin').value.trim(); if (v) { LS.set('sidestr_chain', v); location.search = '?chain=' + encodeURIComponent(v); } };
 } else boot();
 
 async function boot() {
   try {
     const { openWallet, DEFAULTS } = await import('./wallet.mjs');
     relays = (LS.get('sidestr_relays') ?? DEFAULTS.relays.join(',')).split(',').map((x) => x.trim()).filter(Boolean);
-    w = await openWallet({ mirror, ...overrides, onProgress: (s) => { $('boot').textContent = s + '…'; } });
-    LS.set('sidestr_mirror', mirror);
+    w = await openWallet({ mirror: mirror || undefined, chain: chainId || undefined, relays, ...overrides, onProgress: (s) => { $('boot').textContent = s + '…'; } });
+    mirror = w.mirror; if (chainId) { LS.set('sidestr_chain', chainId); LS.del('sidestr_mirror'); } else LS.set('sidestr_mirror', mirror);
     key = LS.get(`sidestr_key:${w.chain.id}`); render();
-  } catch (e) { app.innerHTML = `<section><div class="err"><b>could not open the chain</b><br>${esc(e.message)}<br><span class="dim">mirror: ${esc(mirror)}</span></div></section>`; console.error(e); }
+    w.judgeMirror().then((v) => { verdict = v; if (!busy) render(); }).catch(() => {});
+    // a new block is announced the second it is made; the mirror follows within seconds
+    w.followTips(async (t) => { for (let i = 0; i < 6 && (w.tip?.height ?? -1) < t.tip; i++) { await new Promise((r) => setTimeout(r, 2500)); await w.refresh(); } verdict = await w.judgeMirror().catch(() => verdict); if (!busy) render(); });
+  } catch (e) { app.innerHTML = `<section><div class="err"><b>could not open the chain</b><br>${esc(e.message)}<br><span class="dim">${chainId ? 'chain: ' + esc(chainId) + ' · relays: ' + esc(relays.join(', ')) : 'mirror: ' + esc(mirror)}</span></div></section>`; console.error(e); }
 }
 
 function render() {
-  $('chainpill').innerHTML = `chain <b>${esc(w.chain.name)}</b>`; $('tippill').innerHTML = `height <b>${w.tip?.height ?? 0}</b>`;
+  $('chainpill').innerHTML = `chain <b>${esc(w.chain.name)}</b>`; $('tippill').innerHTML = `height <b>${w.tip?.height ?? 0}</b>${verdict ? ` <span class="${verdict.ok === false ? 'bad' : verdict.ok ? 'good' : 'dim'}" title="${esc(verdict.note)}">${verdict.ok === false ? '⚠' : verdict.ok ? '✓' : '·'}</span>` : ''}`;
   if (!key) return (app.innerHTML = `<section><h2>your key</h2><p>No key in this browser for <b>${esc(w.chain.name)}</b>. Make one, or paste one you saved.</p>
     <div class="row"><button class="ac" id="mk">make a new key</button></div>
     <div class="row" style="margin-top:.6rem"><input id="imp" class="grow mono" placeholder="64 hex characters"><button id="impgo">use this key</button></div>
@@ -81,7 +89,9 @@ function render() {
 <section><h2>coins</h2>${cs.length ? `<table><tr><th>value</th><th>height</th><th></th></tr>${cs.map((c) => `<tr><td class="mono">${sats(c.value)}</td><td>${c.height}</td><td class="dim">${c.coinbase ? (c.mature ? 'coinbase, mature' : `coinbase, matures at ${c.maturesAt}`) : ''} <a href="${explore('tx', c.txid)}" target="_blank" rel="noopener">${esc(c.txid.slice(0, 10))}… ↗</a></td></tr>`).join('')}</table>` : '<div class="dim">nothing yet</div>'}</section>
 <section><h2>history</h2>${hist.length ? `<table><tr><th></th><th class="r">sats</th><th>block</th><th>tx</th></tr>${hist.map((h) => `<tr><td class="${h.dir === 'in' ? 'good' : 'muted'}">${h.dir}</td><td class="r mono">${h.dir === 'in' ? '+' : '−'}${sats(h.value)}</td><td>${h.height}</td><td><a href="${explore('tx', h.txid)}" target="_blank" rel="noopener" class="mono">${esc(h.txid.slice(0, 10))}…</a></td></tr>`).join('')}</table>` : '<div class="dim">nothing yet</div>'}</section>
 <section><h2>settings</h2>
-  <div class="row"><span class="muted" style="width:5rem">mirror</span><input id="mirrorset" class="grow mono" value="${esc(mirror)}"></div>
+  ${chainId ? `<div class="row"><span class="muted" style="width:5rem">chain</span><span class="mono">${esc(chainId)}</span></div>` : ''}
+  <div class="row"><span class="muted" style="width:5rem">mirror</span><input id="mirrorset" class="grow mono" value="${esc(mirror)}"${chainId ? ' title="found from the signer\'s announcement; edit to pin one instead"' : ''}></div>
+  ${verdict ? `<div class="row"><span class="muted" style="width:5rem"></span><span class="${verdict.ok === false ? 'bad' : 'dim'}">${esc(verdict.note)}</span></div>` : ''}
   <div class="row" style="margin-top:.4rem"><span class="muted" style="width:5rem">relays</span><input id="relayset" class="grow mono" value="${esc(relays.join(', '))}"></div>
   <div class="row" style="margin-top:.6rem"><button id="save">save</button></div>
   <details style="margin-top:.8rem"><summary>private key backup</summary><div class="addr mono" style="margin-top:.4rem">${esc(key)}</div><p class="muted">Anyone with this can spend your coins. It is not encrypted.</p></details>
@@ -102,7 +112,7 @@ function setKeyHandlers() {
   return '';
 }
 async function send() {
-  const out = $('sendout'), btn = $('send'); out.innerHTML = '';
+  const out = $('sendout'), btn = $('send'); out.innerHTML = ''; busy = true;
   let b; try { b = w.build({ key, to: $('to').value, amount: Number($('amount').value), fee: $('fee').value.trim() || null }); if (!w.verify(b, key)) throw new Error('the signature did not verify; nothing was sent'); }
   catch (e) { return out.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
   btn.disabled = true;
@@ -110,12 +120,12 @@ async function send() {
   try {
     const r = await w.publish(b.hex, relays);
     const rl = Object.entries(r.results).map(([u, s]) => `<span class="${s === 'ok' ? 'good' : 'dim'}">${esc(u.replace('wss://', ''))}: ${esc(s)}</span>`).join(' · ');
-    if (!r.accepted) { btn.disabled = false; return out.innerHTML += `<div class="err">no relay accepted the event: ${rl}</div>`; }
+    if (!r.accepted) { btn.disabled = false; busy = false; return out.innerHTML += `<div class="err">no relay accepted the event: ${rl}</div>`; }
     out.innerHTML += `<div>event <code>${esc(r.event.slice(0, 16))}…</code> → ${rl}</div><div id="wait" class="muted">waiting for the mirror to show it…</div>`;
-    for (let i = 0; i < 18; i++) { await new Promise((res) => setTimeout(res, 10000)); const m = await w.mined(b.txid); if (m) { $('wait').innerHTML = `<span class="good">mined in block ${m.height}</span> · <a href="${explore('tx', b.txid)}" target="_blank" rel="noopener">on the explorer ↗</a>`; btn.disabled = false; return render(); } $('wait').textContent = `waiting for the mirror to show it… ${(i + 1) * 10} s`; }
+    for (let i = 0; i < 36; i++) { await new Promise((res) => setTimeout(res, 5000)); const m = await w.mined(b.txid); if (m) { $('wait').innerHTML = `<span class="good">mined in block ${m.height}</span> · <a href="${explore('tx', b.txid)}" target="_blank" rel="noopener">on the explorer ↗</a>`; btn.disabled = false; busy = false; return render(); } $('wait').textContent = `waiting for the mirror to show it… ${(i + 1) * 5} s`; }
     $('wait').innerHTML = `<span class="warn">not on the mirror after 3 minutes</span> — the producer may be slow, or the mirror behind; refresh later.`;
   } catch (e) { out.innerHTML += `<div class="err">${esc(e.message)}</div>`; }
-  btn.disabled = false;
+  btn.disabled = false; busy = false;
 }
 $('refresh').onclick = async () => { if (!w) return; $('refresh').disabled = true; try { await w.refresh(); render(); } finally { $('refresh').disabled = false; } };
 </script>

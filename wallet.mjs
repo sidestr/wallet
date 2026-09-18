@@ -5,21 +5,32 @@
 // to a producer; a wallet needs a mirror to read and a relay to send to, and nothing else.
 export const DEFAULTS = {
   cdn: 'https://cdn.jsdelivr.net/gh/bitcoin-desktop/schema@v0.0.27',
-  lib: 'https://cdn.jsdelivr.net/gh/sidestr/spec@da3adb1ac3a3e24e6cc69a297efbdec45eba5c95/siding/lib',
-  explorer: 'https://cdn.jsdelivr.net/gh/sidestr/explorer@4fad658fd86be4becf50aa1ed8f46a9cb9f4ba61/explorer.mjs',
+  lib: 'https://cdn.jsdelivr.net/gh/sidestr/spec@e4e2b31aa6daf6df7a810154f217148dc104e1ee/siding/lib',
+  explorer: 'https://cdn.jsdelivr.net/gh/sidestr/explorer@a3ef1608abcaface0871288a6fb0292876fbbf1d/explorer.mjs',
   relays: ['wss://nos.lol', 'wss://relay.damus.io'],
 };
 
-export async function openWallet({ mirror, cdn = DEFAULTS.cdn, lib = DEFAULTS.lib, explorer = DEFAULTS.explorer, loadJson, onProgress = () => {} } = {}) {
-  if (!mirror) throw new Error('a mirror URL is needed');
+// Open by mirror, or by chain id alone: then the relays are asked for the signer's tip
+// announcement (kind 33333, d = chain id), which names the mirrors; the one whose chain.json
+// names the announcer as signer is taken. Either way the mirror is judged against the announcement.
+export async function openWallet({ mirror, chain, relays = DEFAULTS.relays, cdn = DEFAULTS.cdn, lib = DEFAULTS.lib, explorer = DEFAULTS.explorer, loadJson, onProgress = () => {} } = {}) {
+  if (!mirror && !chain) throw new Error('a mirror URL or a chain id is needed');
   onProgress('loading the engine');
-  const [{ Explorer }, secp, { SIGHASH_UNIFIED }, { makeSigner }, relay, address] = await Promise.all([
-    import(explorer), import(`${cdn}/codec/secp256k1.js`), import(`${cdn}/codec/interpreter.js`), import(`${lib}/schnorr.mjs`), import(`${lib}/relay.mjs`), import(`${lib}/address.mjs`)]);
+  const [{ Explorer }, secp, { SIGHASH_UNIFIED }, { makeSigner }, relay, address, announce, nostr] = await Promise.all([
+    import(explorer), import(`${cdn}/codec/secp256k1.js`), import(`${cdn}/codec/interpreter.js`), import(`${lib}/schnorr.mjs`), import(`${lib}/relay.mjs`), import(`${lib}/address.mjs`), import(`${lib}/announce.mjs`), import(`${cdn}/codec/nostr.js`)]);
+  let announced = null;
+  if (!mirror) {
+    onProgress(`asking ${relays.length} relay(s) where ${chain} is`);
+    const found = await announce.findChain({ relays, chainId: chain, verify: nostr.verifyNostrEvent }); // chain.json is always over the network, like the explorer's
+    mirror = found.mirror; announced = found.tip;
+  }
   const ex = new Explorer(mirror, { cdn, sidestr: lib, ...(loadJson ? { loadJson } : {}) });
   onProgress('reading the chain from the mirror');
   await ex.open();
+  if (chain && ex.chain.id !== chain) throw new Error(`the mirror serves ${ex.chain.id}, not ${chain}`);
   const signer = makeSigner({ hash: ex.hash, secp });
-  return new Wallet({ ex, signer, secp, events: relay.makeEvents({ signer, hash: ex.hash }), relay, address, SIGHASH_UNIFIED });
+  const w = new Wallet({ ex, signer, secp, events: relay.makeEvents({ signer, hash: ex.hash }), relay, address, announce, nostr, SIGHASH_UNIFIED, mirror, relays, announced });
+  return w;
 }
 
 export class Wallet {
@@ -28,6 +39,17 @@ export class Wallet {
   get hrp() { return this.ex.chain.addressPrefix; }
   get tip() { return this.ex.tip(); }
   refresh() { return this.ex.refresh(); }
+  // the mirror against the signer's latest announcement: { ok: true | false | null, note }
+  async judgeMirror() {
+    if (!this.announced) this.announced = await this.announce.fetchLatestTip({ relays: this.relays, chainId: this.chain.id, verify: this.nostr.verifyNostrEvent, signer: this.chain.signer });
+    const tip = this.tip; return this.announce.judgeMirror({ announced: this.announced, height: tip.height, headerHex: this.ex.headerHex(tip.height) });
+  }
+  // the signer's announcements as they come: onTip({ tip, ... }) for each newer one; returns { close() }
+  followTips(onTip, relays = this.relays) {
+    return this.relay.subscribe({ relays, chainId: this.chain.id, verify: this.nostr.verifyNostrEvent, kind: this.announce.TIP_KIND, tag: 'd', since: 60, onEvent: (ev) => {
+      const t = this.announce.parseTip(ev); if (!t || t.pubkey !== this.chain.signer || (this.announced && t.tip <= this.announced.tip)) return; this.announced = t; onTip(t);
+    } });
+  }
   newKey() { return this.signer.randomKey(); }
   identity(key) { if (!/^[0-9a-f]{64}$/i.test(key ?? '')) throw new Error('a key is 32 bytes of hex'); const pub = this.signer.pubkeyOf(key.toLowerCase()); const script = '5120' + pub; return { pub, script, address: this.address.scriptToAddress(script, this.hrp) }; }
   coins(script) {

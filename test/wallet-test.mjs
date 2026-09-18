@@ -2,16 +2,18 @@
 // checkouts rather than the CDN, and the chain's own signer key: builds a real spend, verifies its
 // signatures with the curve's verifier, round-trips the hex through the codec. Spends nothing
 // unless --send is given, in which case it publishes over the relays and waits for the mirror.
-//   node test/wallet-test.mjs [--mirror URL] [--to ADDRESS] [--amount SATS] [--send]
+//   node test/wallet-test.mjs [--mirror URL | --chain ID] [--to ADDRESS] [--amount SATS] [--send] [--faucet]
 import fs from 'node:fs'; import { homedir } from 'node:os';
 import { openWallet, DEFAULTS } from '../wallet.mjs';
 const args = Object.fromEntries(process.argv.slice(2).map((a, i, all) => a.startsWith('--') ? [a.slice(2), all[i + 1] === undefined || all[i + 1].startsWith('--') ? true : all[i + 1]] : []).filter(Boolean));
 const H = homedir(), t = (name, ok) => { console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${name}`); if (!ok) process.exitCode = 1; };
-const mirror = args.mirror ?? process.env.SIDESTR_MIRROR; if (!mirror) { console.error('give --mirror URL (or SIDESTR_MIRROR): a mirror serving chain.json, blocks.json, blocks.dat'); process.exit(2); }
-const w = await openWallet({ mirror,
+const mirror = args.mirror ?? process.env.SIDESTR_MIRROR, chain = args.chain; if (!mirror && !chain) { console.error('give --mirror URL (or SIDESTR_MIRROR), or --chain ID to find a mirror from the signer\'s announcement on the relays'); process.exit(2); }
+const w = await openWallet({ mirror, chain,
   cdn: process.env.SCHEMA ?? `${H}/bitcoin-desktop/schema`, lib: `${H}/remote/github.com/sidestr/spec/siding/lib`, explorer: `${H}/remote/github.com/sidestr/explorer/explorer.mjs`,
   loadJson: async (u) => JSON.parse(fs.readFileSync(u, 'utf8')), onProgress: (s) => console.log('  … ' + s) });
-console.log(`chain ${w.chain.id} at height ${w.tip.height}, ${w.ex.utxo.size} coins on the chain`);
+console.log(`chain ${w.chain.id} at height ${w.tip.height}, ${w.ex.utxo.size} coins on the chain${chain ? `, mirror ${w.mirror} found from the announcement` : ''}`);
+if (chain) t('the discovered mirror names the announcer as its signer', w.announced?.pubkey === w.chain.signer && w.mirror);
+{ const v = await w.judgeMirror(); t(`the mirror is judged against the signer's announcement (${v.note})`, v.ok !== false); }
 const key = fs.readFileSync(`${H}/.sidestr/${w.chain.name}.key`, 'utf8').trim(); const me = w.identity(key);
 t('identity matches the chain signer', me.script === w.chain.challenge && me.address.startsWith(w.hrp + '1'));
 const coins = w.coins(me.script), bal = w.balance(me.script);
