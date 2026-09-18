@@ -76,18 +76,25 @@ export class Wallet {
   vsize(tx) { return Math.ceil(this.ex.k.codec.txWeight(tx) / 4); }
   // fee null: exactly the chain's minimum for this transaction's size (key-path witnesses are 65 bytes, known before signing)
   get pegoutMin() { return Number(this.chain.pegoutMin ?? 10000); }
+  // --- the evm rule (proposals/evm.md): the same key is an Ethereum key; 1 sat = 1 gwei ---------
+  get evm() { return this.ex.rules?.evm ?? null; }
+  ethAddress(key) { const u = this.evm?.lib?.util; if (!u) return null; return u.createAddressFromPrivateKey(u.hexToBytes('0x' + key)).toString(); }
+  async evmBalance(address) { const e = this.evm; if (!e) return 0n; const a = await e.vm.stateManager.getAccount(e.lib.util.createAddressFromString(address)); return a?.balance ?? 0n; }
+  // the deposit output pair: the reserve payment, then the marker naming the address
+  evmDepositOutputs(address, amount) { const enc = new TextEncoder(); const b = new Uint8Array([...enc.encode('evmin:'), ...Uint8Array.from(address.slice(2).match(/../g), (x) => parseInt(x, 16))]); return [{ value: amount, scriptPubKey: (this.chain.evm?.reserve ?? this.chain.challenge).toLowerCase() }, { value: 0, scriptPubKey: '6a' + b.length.toString(16).padStart(2, '0') + Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('') }]; }
   // the burn output for a parent address or script (SPEC 7): OP_RETURN `pegout:<script>`
   pegoutScript(to) { const enc = new TextEncoder().encode(`pegout:${this.resolveTo(to).script}`); return '6a' + enc.length.toString(16).padStart(2, '0') + Array.from(enc, (b) => b.toString(16).padStart(2, '0')).join(''); }
   // pegout: `to` is a parent address; the amount burns here and the peg holders owe it there
-  build({ key, to, amount, fee = null, pegout = false }) {
-    const me = this.identity(key); amount = Number(amount); const auto = fee == null || fee === '' || fee === 'auto'; fee = auto ? null : Number(fee);
+  build({ key, to, amount, fee = null, pegout = false, evmDeposit = false }) {
+    const me = this.identity(key); amount = Number(amount);
+    if (evmDeposit && !/^0x[0-9a-fA-F]{40}$/.test(String(to).trim())) throw new Error('a deposit goes to a 0x address'); const auto = fee == null || fee === '' || fee === 'auto'; fee = auto ? null : Number(fee);
     if (!Number.isInteger(amount) || amount <= 0) throw new Error('the amount is a whole number of sats'); if (!auto && (!Number.isInteger(fee) || fee < 0)) throw new Error('bad fee');
     if (pegout && amount < this.pegoutMin) throw new Error(`a peg-out burns at least ${this.pegoutMin.toLocaleString('en-US')} sats`);
-    const dest = pegout ? { script: this.pegoutScript(to), note: `peg-out: ${amount.toLocaleString('en-US')} sats burn on ${this.chain.name} and are owed to ${String(to).trim()} on ${this.chain.parent}; the peg holders pay it there` } : this.resolveTo(to);
+    const dest = evmDeposit ? { script: (this.chain.evm?.reserve ?? this.chain.challenge).toLowerCase(), note: `deposit: ${amount.toLocaleString('en-US')} sats to the reserve, credited as ${amount.toLocaleString('en-US')} gwei to ${String(to).trim()} in the EVM`, extra: this.evmDepositOutputs(String(to).trim(), amount).slice(1) } : pegout ? { script: this.pegoutScript(to), note: `peg-out: ${amount.toLocaleString('en-US')} sats burn on ${this.chain.name} and are owed to ${String(to).trim()} on ${this.chain.parent}; the peg holders pay it there` } : this.resolveTo(to);
     const coins = this.coins(me.script).filter((c) => c.mature).sort((a, b) => b.value - a.value);
     const bound = auto ? Math.ceil(this.minFeeRate * 200) : fee; const picked = []; let sum = 0; for (const c of coins) { picked.push(c); sum += c.value; if (sum >= amount + bound) break; }
     if (sum < amount + bound) throw new Error(`not enough mature coins: ${sum} sats available, ${amount + bound} needed`);
-    const lay = (f) => { const change = sum - amount - f; return [{ value: amount, scriptPubKey: dest.script }, ...(change > 0 ? [{ value: change, scriptPubKey: me.script }] : [])]; };
+    const lay = (f) => { const change = sum - amount - f; return [{ value: amount, scriptPubKey: dest.script }, ...(dest.extra ?? []), ...(change > 0 ? [{ value: change, scriptPubKey: me.script }] : [])]; };
     const tx = { version: 2, inputs: picked.map((c) => ({ prevout: { txid: c.txid, vout: c.vout }, scriptSig: '', sequence: 0xfffffffd })), outputs: lay(auto ? 0 : fee), lockTime: 0, witness: [] };
     if (auto) { fee = Math.ceil(this.vsize({ ...tx, witness: tx.inputs.map(() => ['00'.repeat(65)]) }) * this.minFeeRate); tx.outputs = lay(fee); if (sum - amount - fee < 0) throw new Error(`not enough mature coins for ${amount} sats plus the ${fee}-sat minimum fee`); }
     const change = sum - amount - fee;
