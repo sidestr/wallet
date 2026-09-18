@@ -5,8 +5,8 @@
 // to a producer; a wallet needs a mirror to read and a relay to send to, and nothing else.
 export const DEFAULTS = {
   cdn: 'https://cdn.jsdelivr.net/gh/bitcoin-desktop/schema@v0.0.27',
-  lib: 'https://cdn.jsdelivr.net/gh/sidestr/spec@e4e2b31aa6daf6df7a810154f217148dc104e1ee/siding/lib',
-  explorer: 'https://cdn.jsdelivr.net/gh/sidestr/explorer@a3ef1608abcaface0871288a6fb0292876fbbf1d/explorer.mjs',
+  lib: 'https://cdn.jsdelivr.net/gh/sidestr/spec@21c88ea2e0cdea7e4885f3d40b9758418a52e8a6/siding/lib',
+  explorer: 'https://cdn.jsdelivr.net/gh/sidestr/explorer@2b7e609ef387c7b80a49b91b11d19c3702f86957/explorer.mjs',
   relays: ['wss://nos.lol', 'wss://relay.damus.io', 'wss://relay.primal.net'],
 };
 
@@ -69,9 +69,15 @@ export class Wallet {
   get minFeeRate() { return Number(this.chain.minFeeRate ?? 1); } // sat/vB, the producer's policy, from chain.json
   vsize(tx) { return Math.ceil(this.ex.k.codec.txWeight(tx) / 4); }
   // fee null: exactly the chain's minimum for this transaction's size (key-path witnesses are 65 bytes, known before signing)
-  build({ key, to, amount, fee = null }) {
-    const me = this.identity(key), dest = this.resolveTo(to); amount = Number(amount); const auto = fee == null || fee === '' || fee === 'auto'; fee = auto ? null : Number(fee);
+  get pegoutMin() { return Number(this.chain.pegoutMin ?? 10000); }
+  // the burn output for a parent address or script (SPEC 7): OP_RETURN `pegout:<script>`
+  pegoutScript(to) { const enc = new TextEncoder().encode(`pegout:${this.resolveTo(to).script}`); return '6a' + enc.length.toString(16).padStart(2, '0') + Array.from(enc, (b) => b.toString(16).padStart(2, '0')).join(''); }
+  // pegout: `to` is a parent address; the amount burns here and the peg holders owe it there
+  build({ key, to, amount, fee = null, pegout = false }) {
+    const me = this.identity(key); amount = Number(amount); const auto = fee == null || fee === '' || fee === 'auto'; fee = auto ? null : Number(fee);
     if (!Number.isInteger(amount) || amount <= 0) throw new Error('the amount is a whole number of sats'); if (!auto && (!Number.isInteger(fee) || fee < 0)) throw new Error('bad fee');
+    if (pegout && amount < this.pegoutMin) throw new Error(`a peg-out burns at least ${this.pegoutMin.toLocaleString('en-US')} sats`);
+    const dest = pegout ? { script: this.pegoutScript(to), note: `peg-out: ${amount.toLocaleString('en-US')} sats burn on ${this.chain.name} and are owed to ${String(to).trim()} on ${this.chain.parent}; the peg holders pay it there` } : this.resolveTo(to);
     const coins = this.coins(me.script).filter((c) => c.mature).sort((a, b) => b.value - a.value);
     const bound = auto ? Math.ceil(this.minFeeRate * 200) : fee; const picked = []; let sum = 0; for (const c of coins) { picked.push(c); sum += c.value; if (sum >= amount + bound) break; }
     if (sum < amount + bound) throw new Error(`not enough mature coins: ${sum} sats available, ${amount + bound} needed`);
