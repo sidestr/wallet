@@ -75,7 +75,7 @@ function render() {
   <div class="row" style="margin-top:.5rem"><button id="copy">copy address</button><span class="dim">script <code>${esc(me.script.slice(0, 12))}…</code></span></div></section>
 <section><h2>send</h2>
   <div class="row"><input id="to" class="grow mono" placeholder="${esc(w.hrp)}1… address (or a script hex)"></div>
-  <div class="row" style="margin-top:.5rem"><input id="amount" class="grow mono" placeholder="amount in sats" inputmode="numeric"><input id="fee" class="mono" style="width:9rem" value="1000" inputmode="numeric" title="fee in sats"><button class="ac" id="send">sign &amp; publish</button></div>
+  <div class="row" style="margin-top:.5rem"><input id="amount" class="grow mono" placeholder="amount in sats" inputmode="numeric"><input id="fee" class="mono" style="width:9rem" placeholder="fee: auto" inputmode="numeric" title="fee in sats; empty = the chain minimum for this size"><button class="ac" id="send">sign &amp; publish</button></div>
   <div id="sendout" style="margin-top:.6rem"></div></section>
 <section><h2>coins</h2>${cs.length ? `<table><tr><th>value</th><th>height</th><th></th></tr>${cs.map((c) => `<tr><td class="mono">${sats(c.value)}</td><td>${c.height}</td><td class="dim">${c.coinbase ? (c.mature ? 'coinbase, mature' : `coinbase, matures at ${c.maturesAt}`) : ''} <a href="${explore('tx', c.txid)}" target="_blank" rel="noopener">${esc(c.txid.slice(0, 10))}… ↗</a></td></tr>`).join('')}</table>` : '<div class="dim">nothing yet</div>'}</section>
 <section><h2>history</h2>${hist.length ? `<table><tr><th></th><th class="r">sats</th><th>block</th><th>tx</th></tr>${hist.map((h) => `<tr><td class="${h.dir === 'in' ? 'good' : 'muted'}">${h.dir}</td><td class="r mono">${h.dir === 'in' ? '+' : '−'}${sats(h.value)}</td><td>${h.height}</td><td><a href="${explore('tx', h.txid)}" target="_blank" rel="noopener" class="mono">${esc(h.txid.slice(0, 10))}…</a></td></tr>`).join('')}</table>` : '<div class="dim">nothing yet</div>'}</section>
@@ -98,10 +98,10 @@ function setKeyHandlers() {
 }
 async function send() {
   const out = $('sendout'), btn = $('send'); out.innerHTML = '';
-  let b; try { b = w.build({ key, to: $('to').value, amount: Number($('amount').value), fee: Number($('fee').value) }); if (!w.verify(b, key)) throw new Error('the signature did not verify; nothing was sent'); }
+  let b; try { b = w.build({ key, to: $('to').value, amount: Number($('amount').value), fee: $('fee').value.trim() || null }); if (!w.verify(b, key)) throw new Error('the signature did not verify; nothing was sent'); }
   catch (e) { return out.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
   btn.disabled = true;
-  out.innerHTML = `${b.note ? `<div class="note">${esc(b.note)}</div>` : ''}<div class="muted" style="margin-top:.4rem">signed <code>${esc(b.txid.slice(0, 16))}…</code>: ${sats(b.amount)} sats + fee ${sats(b.fee)}, ${b.inputs.length} input${b.inputs.length === 1 ? '' : 's'}, change ${sats(b.change)}. publishing…</div>`;
+  out.innerHTML = `${b.note ? `<div class="note">${esc(b.note)}</div>` : ''}<div class="muted" style="margin-top:.4rem">signed <code>${esc(b.txid.slice(0, 16))}…</code>: ${sats(b.amount)} sats + fee ${sats(b.fee)} (${b.vsize} vB at ${w.minFeeRate} sat/vB), ${b.inputs.length} input${b.inputs.length === 1 ? '' : 's'}, change ${sats(b.change)}. publishing…</div>`;
   try {
     const r = await w.publish(b.hex, relays);
     const rl = Object.entries(r.results).map(([u, s]) => `<span class="${s === 'ok' ? 'good' : 'dim'}">${esc(u.replace('wss://', ''))}: ${esc(s)}</span>`).join(' · ');

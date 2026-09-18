@@ -5,10 +5,9 @@
 // to a producer; a wallet needs a mirror to read and a relay to send to, and nothing else.
 export const DEFAULTS = {
   cdn: 'https://cdn.jsdelivr.net/gh/bitcoin-desktop/schema@v0.0.27',
-  lib: 'https://cdn.jsdelivr.net/gh/sidestr/spec@d49fddb4cd46829fa6d459f2ccbe10022ec1b528/siding/lib',
+  lib: 'https://cdn.jsdelivr.net/gh/sidestr/spec@dd486f6618cb1f83839c702b92245f36ba4fba82/siding/lib',
   explorer: 'https://cdn.jsdelivr.net/gh/sidestr/explorer@4fad658fd86be4becf50aa1ed8f46a9cb9f4ba61/explorer.mjs',
   relays: ['wss://nos.lol', 'wss://relay.damus.io'],
-  fee: 1000,
 };
 
 export async function openWallet({ mirror, cdn = DEFAULTS.cdn, lib = DEFAULTS.lib, explorer = DEFAULTS.explorer, loadJson, onProgress = () => {} } = {}) {
@@ -45,18 +44,22 @@ export class Wallet {
     return { script: a.script, note: a.hrp === this.hrp ? null : `that address carries the prefix "${a.hrp}"; on this chain the same script is ${this.address.scriptToAddress(a.script, this.hrp)}. Its script is what is paid.` };
   }
   // the same transaction the reference CLI makes: key-path spends, unified sighash, largest coins first
-  build({ key, to, amount, fee = DEFAULTS.fee }) {
-    const me = this.identity(key), dest = this.resolveTo(to); amount = Number(amount); fee = Number(fee);
-    if (!Number.isInteger(amount) || amount <= 0) throw new Error('the amount is a whole number of sats'); if (!Number.isInteger(fee) || fee < 0) throw new Error('bad fee');
+  get minFeeRate() { return Number(this.chain.minFeeRate ?? 1); } // sat/vB, the producer's policy, from chain.json
+  vsize(tx) { return Math.ceil(this.ex.k.codec.txWeight(tx) / 4); }
+  // fee null: exactly the chain's minimum for this transaction's size (key-path witnesses are 65 bytes, known before signing)
+  build({ key, to, amount, fee = null }) {
+    const me = this.identity(key), dest = this.resolveTo(to); amount = Number(amount); const auto = fee == null || fee === '' || fee === 'auto'; fee = auto ? null : Number(fee);
+    if (!Number.isInteger(amount) || amount <= 0) throw new Error('the amount is a whole number of sats'); if (!auto && (!Number.isInteger(fee) || fee < 0)) throw new Error('bad fee');
     const coins = this.coins(me.script).filter((c) => c.mature).sort((a, b) => b.value - a.value);
-    const picked = []; let sum = 0; for (const c of coins) { picked.push(c); sum += c.value; if (sum >= amount + fee) break; }
-    if (sum < amount + fee) throw new Error(`not enough mature coins: ${sum} sats available, ${amount + fee} needed`);
+    const bound = auto ? Math.ceil(this.minFeeRate * 200) : fee; const picked = []; let sum = 0; for (const c of coins) { picked.push(c); sum += c.value; if (sum >= amount + bound) break; }
+    if (sum < amount + bound) throw new Error(`not enough mature coins: ${sum} sats available, ${amount + bound} needed`);
+    const lay = (f) => { const change = sum - amount - f; return [{ value: amount, scriptPubKey: dest.script }, ...(change > 0 ? [{ value: change, scriptPubKey: me.script }] : [])]; };
+    const tx = { version: 2, inputs: picked.map((c) => ({ prevout: { txid: c.txid, vout: c.vout }, scriptSig: '', sequence: 0xfffffffd })), outputs: lay(auto ? 0 : fee), lockTime: 0, witness: [] };
+    if (auto) { fee = Math.ceil(this.vsize({ ...tx, witness: tx.inputs.map(() => ['00'.repeat(65)]) }) * this.minFeeRate); tx.outputs = lay(fee); if (sum - amount - fee < 0) throw new Error(`not enough mature coins for ${amount} sats plus the ${fee}-sat minimum fee`); }
     const change = sum - amount - fee;
-    const tx = { version: 2, inputs: picked.map((c) => ({ prevout: { txid: c.txid, vout: c.vout }, scriptSig: '', sequence: 0xfffffffd })),
-      outputs: [{ value: amount, scriptPubKey: dest.script }, ...(change > 0 ? [{ value: change, scriptPubKey: me.script }] : [])], lockTime: 0, witness: [] };
     const prevouts = picked.map((c) => ({ value: c.value, scriptPubKey: me.script })); const ht = 0x01 | this.SIGHASH_UNIFIED, k = this.ex.k, h = this.ex.hash;
     tx.witness = tx.inputs.map((_, i) => { let m = k.interpreter.sighashUnified(tx, i, prevouts, ht, 2); if (typeof m === 'string') m = h.hexToBytes(m); return [h.bytesToHex(this.signer.schnorrSign(m, key)) + ht.toString(16).padStart(2, '0')]; });
-    return { tx, hex: k.codec.encodeHex('Transaction', tx), txid: k.codec.txid(tx), inputs: picked, amount, fee, change, prevouts, note: dest.note };
+    return { tx, hex: k.codec.encodeHex('Transaction', tx), txid: k.codec.txid(tx), inputs: picked, amount, fee, vsize: this.vsize(tx), change, prevouts, note: dest.note };
   }
   // check our own signatures the way a validator would, before anything leaves the machine
   verify({ tx, prevouts }, key) {

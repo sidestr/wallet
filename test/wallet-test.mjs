@@ -19,6 +19,8 @@ console.log(`  ${me.address}: ${coins.length} coins, spendable ${bal.spendable},
 t('coins carry maturity', coins.every((c) => typeof c.mature === 'boolean'));
 const to = args.to ?? 'ts1pxklu7cthjnc7yvzpelag24p0906sgsxzedlrkd67sv7xtlraupysngzje5', amount = Number(args.amount ?? 1000);
 const b = w.build({ key, to, amount });
+t(`auto fee is exactly the chain minimum (${b.vsize} vB x ${w.minFeeRate} sat/vB = ${b.fee})`, b.fee === Math.ceil(b.vsize * w.minFeeRate) && b.vsize === w.vsize(b.tx));
+t('an explicit fee is honoured', w.build({ key, to, amount, fee: 5000 }).fee === 5000);
 console.log(`  built ${b.txid.slice(0, 16)}… ${b.inputs.length} input(s), ${b.amount} + fee ${b.fee}, change ${b.change}`);
 t('signatures verify with the curve', w.verify(b, key));
 const back = w.ex.k.codec.decode('Transaction', b.hex); t('hex round-trips through the codec', w.ex.k.codec.txid(back) === b.txid && back.outputs[0].value === amount);
