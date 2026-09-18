@@ -5,7 +5,7 @@
 // to a producer; a wallet needs a mirror to read and a relay to send to, and nothing else.
 export const DEFAULTS = {
   cdn: 'https://cdn.jsdelivr.net/gh/bitcoin-desktop/schema@v0.0.27',
-  lib: 'https://cdn.jsdelivr.net/gh/sidestr/spec@04b691b7ba3135354776f2c15125c53de5ea4452/siding/lib',
+  lib: 'https://cdn.jsdelivr.net/gh/sidestr/spec@5c01a2b24c4953cc51257f080ddcf230225e217f/siding/lib',
   explorer: 'https://cdn.jsdelivr.net/gh/sidestr/explorer@799a74bf67f1578531428ef8ffb9668e1170245b/explorer.mjs',
   relays: ['wss://nos.lol', 'wss://relay.damus.io', 'wss://relay.primal.net'],
 };
@@ -29,7 +29,7 @@ export async function openWallet({ mirror, chain, relays = DEFAULTS.relays, cdn 
   await ex.open();
   if (chain && ex.chain.id !== chain) throw new Error(`the mirror serves ${ex.chain.id}, not ${chain}`);
   const signer = makeSigner({ hash: ex.hash, secp });
-  const w = new Wallet({ ex, signer, secp, events: relay.makeEvents({ signer, hash: ex.hash }), relay, address, announce, nostr, SIGHASH_UNIFIED, mirror, relays, announced });
+  const w = new Wallet({ ex, signer, secp, events: relay.makeEvents({ signer, hash: ex.hash }), relay, address, announce, nostr, SIGHASH_UNIFIED, mirror, relays, announced, lib, cdn, loadJson });
   return w;
 }
 
@@ -95,6 +95,26 @@ export class Wallet {
     return tx.inputs.every((_, i) => { let m = k.interpreter.sighashUnified(tx, i, prevouts, ht, 2); if (typeof m === 'string') m = h.hexToBytes(m); const w = tx.witness[i][0]; return w.endsWith(ht.toString(16).padStart(2, '0')) && this.secp.verifySchnorr(m, h.hexToBytes(w.slice(0, 128)), h.hexToBytes(pub)); });
   }
   // publish as a kind 23500 event from a throwaway key: the transaction authorises itself
+  // --- the desk (SPEC 6.2): locked parent rewards pledged for sats now ---------------------
+  get desk() { return this.chain.pledge ?? null; }
+  // my locked rewards as the desk has seen them, with whether each is pledged already
+  async lockedRewards(script) {
+    if (!this.desk) return []; const [cb, pl] = await Promise.all([fetch(`${this.mirror}/coinbases.json`, { cache: 'no-store' }).then((r) => r.ok ? r.json() : { coinbases: [] }).catch(() => ({ coinbases: [] })), fetch(`${this.mirror}/pledges.json`, { cache: 'no-store' }).then((r) => r.ok ? r.json() : { pledges: {} }).catch(() => ({ pledges: {} }))]);
+    return (cb.coinbases ?? []).filter((c) => c.script === script).map((c) => ({ ...c, pledged: pl.pledges?.[`${c.txid}:${c.vout}`] ?? null, maturity: c.height >= this.desk.lockedFrom ? this.desk.maturity : c.height + 100, pays: Math.floor(c.value * this.desk.rate) }));
+  }
+  async #parentKernel() { if (!this._pk) { const { parentKernel } = await import(`${this.lib}/pledge.mjs`); this._pk = await parentKernel({ cdn: this.cdn, parent: this.chain.parent, ...(this.loadJson ? { loadJson: this.loadJson } : {}) }); } return this._pk; }
+  // sign the maturity transaction for one reward with my key (the payee is me) and publish it as kind 33502
+  async pledge({ key, reward, relays = this.relays }) {
+    const { buildPledge, PLEDGE_KIND } = await import(`${this.lib}/pledge.mjs`); const k = await this.#parentKernel(); const me = this.identity(key);
+    const b = buildPledge({ k, hash: this.ex.hash, signer: this.signer, SIGHASH_UNIFIED: this.SIGHASH_UNIFIED, key, chain: this.chain, reward, payeeScript: me.script });
+    return this.publishPledge({ hex: b.hex, outpoint: `${reward.txid}:${reward.vout}`, relays, pays: b.pays, lockTime: b.lockTime });
+  }
+  // a pledge signed elsewhere (a node wallet, say): checked for shape here, then published
+  async publishPledge({ hex, outpoint, relays = this.relays, pays = null, lockTime = null }) {
+    const { PLEDGE_KIND } = await import(`${this.lib}/pledge.mjs`); hex = String(hex).trim(); if (!/^[0-9a-f]+$/i.test(hex)) throw new Error('a transaction is hex');
+    const ev = this.events.signEvent(this.signer.randomKey(), { kind: PLEDGE_KIND, tags: [['d', outpoint], ['chain', this.chain.id]], content: hex.toLowerCase() });
+    const results = await this.relay.publish({ relays, event: ev }); return { event: ev.id, results, accepted: Object.values(results).some((r) => r === 'ok'), pays, lockTime };
+  }
   async publish(hex, relays = DEFAULTS.relays) { const ev = this.events.txEvent(this.signer.randomKey(), this.chain.id, hex); const results = await this.relay.publish({ relays, event: ev }); return { event: ev.id, results, accepted: Object.values(results).some((r) => r === 'ok') }; }
   // ask a faucet for coins (SPEC 11, kind 23501): the request carries the address; a faucet on the relay answers with a payment
   async requestFaucet(address, relays = DEFAULTS.relays) { const ev = this.events.signEvent(this.signer.randomKey(), { kind: 23501, tags: [['chain', this.chain.id]], content: address }); const results = await this.relay.publish({ relays, event: ev }); return { event: ev.id, results, accepted: Object.values(results).some((r) => r === 'ok') }; }
