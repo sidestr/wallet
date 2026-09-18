@@ -7,7 +7,7 @@ export const DEFAULTS = {
   cdn: 'https://cdn.jsdelivr.net/gh/bitcoin-desktop/schema@v0.0.27',
   lib: 'https://cdn.jsdelivr.net/gh/sidestr/spec@e4e2b31aa6daf6df7a810154f217148dc104e1ee/siding/lib',
   explorer: 'https://cdn.jsdelivr.net/gh/sidestr/explorer@a3ef1608abcaface0871288a6fb0292876fbbf1d/explorer.mjs',
-  relays: ['wss://nos.lol', 'wss://relay.damus.io'],
+  relays: ['wss://nos.lol', 'wss://relay.damus.io', 'wss://relay.primal.net'],
 };
 
 // Open by mirror, or by chain id alone: then the relays are asked for the signer's tip
