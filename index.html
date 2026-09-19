@@ -154,6 +154,15 @@ async function renderRewards() {
   } catch (e) { el.innerHTML = `<span class="err">${esc(e.message)}</span>`; }
   const pp = $('ppaste'); if (pp) pp.onclick = async () => { const out = $('pout2'); try { const p = await w.publishPledge({ hex: $('phex').value, outpoint: $('pout').value.trim(), relays }); out.innerHTML = p.accepted ? `<div class="good">published · the desk checks it and pays the marker's script</div>` : `<div class="err">no relay accepted it</div>`; } catch (e) { out.innerHTML = `<div class="err">${esc(e.message)}</div>`; } };
 }
+// the preview: what will happen, from the signed transaction and the dry run, before anything is published.
+// Resolves true on "send", false on "cancel". Every send path goes through it.
+function preview(b, outId, { what, lines }) {
+  return new Promise((resolve) => { const out = $(outId); const id = 'pv' + Math.random().toString(36).slice(2, 7);
+    out.innerHTML = `<div class="note"><div style="font-weight:600;margin-bottom:.3rem">${esc(what)}</div><table style="margin:0">${lines.filter(Boolean).map(([k, v, cls]) => `<tr><td class="dim" style="padding:.1rem .8rem .1rem 0;white-space:nowrap">${esc(k)}</td><td class="${cls ?? ''}" style="padding:.1rem 0">${v}</td></tr>`).join('')}</table>
+      <div class="row" style="margin-top:.6rem"><button class="ac" id="${id}-go">send</button><button id="${id}-no">cancel</button><span class="muted">signed on this device · checked against the chain this page validated · nothing has left yet</span></div></div>`;
+    $(`${id}-go`).onclick = () => resolve(true); $(`${id}-no`).onclick = () => { out.innerHTML = '<div class="muted">cancelled; nothing was sent</div>'; resolve(false); }; });
+}
+const satsLines = (b, to) => [['to', `<span class="mono">${esc(to)}</span>`], ['they receive', `${sats(b.amount)} sats`], ['fee', `${sats(b.fee)} sats · ${b.vsize} vB at ${w.minFeeRate} sat/vB`], ['you keep', `${sats(w.balance(me.script).spendable - b.amount - b.fee)} sats spendable`], ['inputs', `${b.inputs.length} coin${b.inputs.length === 1 ? '' : 's'}, change ${sats(b.change)}`], ['arrives', `next block`], b.note ? ['note', esc(b.note), 'warn'] : null];
 // the EVM activity of my address as this page has validated it
 function renderActivity(addr) {
   const el = $('evact'); if (!el) return; const list = w.evmActivity(addr);
@@ -165,7 +174,10 @@ function renderActivity(addr) {
 async function actEvm(builder, outId) {
   const out = $(outId); out.innerHTML = '<div class="muted">signing and dry-running on this page\'s state…</div>'; busy = true; let b;
   try { b = await builder(); if (!w.verify(b, key)) throw new Error('the sidestr signature did not verify; nothing was sent'); } catch (e) { busy = false; return out.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
-  out.innerHTML = `<div class="note">${esc(b.note)}</div><div class="muted">Ethereum tx <code>${esc(b.ethHash.slice(0, 18))}…</code> in sidestr tx <code>${esc(b.txid.slice(0, 16))}…</code> · fee ${b.fee} sats${b.contractAddress ? ` · the contract will be at <code>${esc(b.contractAddress)}</code>` : ''} · publishing…</div>`;
+  const gw = (x) => `${Number(x).toLocaleString('en-US')} gwei`;
+  const ok = await preview(b, outId, { what: b.note, lines: [['from', `<span class="mono">${esc(b.from)}</span>`], b.to ? ['to', `<span class="mono">${esc(b.to)}</span>`] : ['creates', `<span class="mono">${esc(b.contractAddress)}</span>`], b.value ? ['value', gw(b.value)] : null, ['gas', `${gw(b.gasUsed)} used in the dry run · limit ${Number(b.gasLimit).toLocaleString('en-US')} · 1 gwei per gas`], ['EVM balance after', `${gw(b.evmAfter / 1000000000n)} (from ${gw(b.evmBefore / 1000000000n)})`], b.withdrawal ? ['coinbase pays you', `${sats(b.withdrawal.sats)} sats in the same block`, 'good'] : null, ['sidestr fee', `${sats(b.fee)} sats from your coins`], ['nonce', String(b.nonce)]] });
+  if (!ok) { busy = false; return; }
+  out.innerHTML = `<div class="muted">Ethereum tx <code>${esc(b.ethHash.slice(0, 18))}…</code> in sidestr tx <code>${esc(b.txid.slice(0, 16))}…</code> · publishing…</div>`;
   try { const r = await w.publish(b.hex, relays); if (!r.accepted) throw new Error('no relay accepted the event'); out.innerHTML += `<div class="muted" id="wait3">waiting for the block…</div>`;
     for (let i = 0; i < 36; i++) { await new Promise((res) => setTimeout(res, 5000)); const m = await w.mined(b.txid); if (m) { const rc = w.evmReceipt(b.ethHash); busy = false; render(); const o = $(outId); if (o) o.innerHTML = `<div class="${rc?.status === 1 ? 'good' : 'err'}">${rc ? (rc.status === 1 ? 'done' : 'mined but reverted') : 'mined'} in block ${m.height}${rc ? ` · ${Number(rc.gasUsed).toLocaleString('en-US')} gas` : ''}${rc?.contractAddress ? ` · contract <code>${esc(rc.contractAddress)}</code>` : ''} · <a href="${explore('tx', b.txid)}" target="_blank" rel="noopener">explorer ↗</a></div>`; return; } const wt = $('wait3'); if (wt) wt.textContent = `waiting for the block… ${(i + 1) * 5} s`; }
     out.innerHTML += `<div class="warn">not on the mirror after 3 minutes; refresh later.</div>`;
@@ -175,7 +187,9 @@ async function actEvm(builder, outId) {
 async function actSend(opts, outId, what) {
   const out = $(outId); out.innerHTML = ''; busy = true; let b;
   try { b = w.build(opts); if (!w.verify(b, key)) throw new Error('the signature did not verify; nothing was sent'); } catch (e) { busy = false; return out.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
-  out.innerHTML = `${b.note ? `<div class="note">${esc(b.note)}</div>` : ''}<div class="muted">signed ${esc(b.txid.slice(0, 16))}… · fee ${b.fee} sats · publishing…</div>`;
+  const ok = await preview(b, outId, { what: b.note ?? what, lines: opts.evmDeposit ? [['deposit', `${sats(b.amount)} sats → ${sats(b.amount)} gwei`], ['credited to', `<span class="mono">${esc(opts.to)}</span>`], ['fee', `${sats(b.fee)} sats`], ['you keep', `${sats(w.balance(me.script).spendable - b.amount - b.fee)} sats spendable`]] : satsLines(b, opts.to) });
+  if (!ok) { busy = false; return; }
+  out.innerHTML = `<div class="muted">signed ${esc(b.txid.slice(0, 16))}… · publishing…</div>`;
   try { const r = await w.publish(b.hex, relays); if (!r.accepted) throw new Error('no relay accepted the event'); out.innerHTML += `<div class="muted" id="wait2">waiting for the mirror…</div>`;
     for (let i = 0; i < 36; i++) { await new Promise((res) => setTimeout(res, 5000)); const m = await w.mined(b.txid); if (m) { busy = false; render(); const o = $(outId); if (o) o.innerHTML = `<div class="good">${esc(what)} mined in block ${m.height} · <a href="${explore('tx', b.txid)}" target="_blank" rel="noopener">explorer ↗</a></div>`; return; } const wt = $('wait2'); if (wt) wt.textContent = `waiting for the mirror… ${(i + 1) * 5} s`; }
     out.innerHTML += `<div class="warn">not on the mirror after 3 minutes; refresh later.</div>`;
@@ -186,7 +200,9 @@ async function send() {
   let b; try { b = w.build({ key, to: $('to').value, amount: Number($('amount').value), fee: $('fee').value.trim() || null, pegout: $('pegout').checked }); if (!w.verify(b, key)) throw new Error('the signature did not verify; nothing was sent'); }
   catch (e) { return out.innerHTML = `<div class="err">${esc(e.message)}</div>`; }
   btn.disabled = true;
-  out.innerHTML = `${b.note ? `<div class="note">${esc(b.note)}</div>` : ''}<div class="muted" style="margin-top:.4rem">signed <code>${esc(b.txid.slice(0, 16))}…</code>: ${sats(b.amount)} sats + fee ${sats(b.fee)} (${b.vsize} vB at ${w.minFeeRate} sat/vB), ${b.inputs.length} input${b.inputs.length === 1 ? '' : 's'}, change ${sats(b.change)}. publishing…</div>`;
+  const ok = await preview(b, 'sendout', { what: $('pegout').checked ? `peg out ${sats(b.amount)} sats to ${$('to').value.trim()} on ${w.chain.parent}` : `send ${sats(b.amount)} sats`, lines: $('pegout').checked ? [['burns here', `${sats(b.amount)} sats`], ['owed to you on the parent', `<span class="mono">${esc($('to').value.trim())}</span> · the peg holders pay it, usually within the hour`], ['fee', `${sats(b.fee)} sats`], ['you keep', `${sats(w.balance(me.script).spendable - b.amount - b.fee)} sats spendable`], b.note ? ['note', esc(b.note), 'warn'] : null] : satsLines(b, $('to').value.trim()) });
+  if (!ok) { btn.disabled = false; busy = false; return; }
+  out.innerHTML = `<div class="muted">signed <code>${esc(b.txid.slice(0, 16))}…</code> · publishing…</div>`;
   try {
     const r = await w.publish(b.hex, relays);
     const rl = Object.entries(r.results).map(([u, s]) => `<span class="${s === 'ok' ? 'good' : 'dim'}">${esc(u.replace('wss://', ''))}: ${esc(s)}</span>`).join(' · ');

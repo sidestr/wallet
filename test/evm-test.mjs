@@ -36,6 +36,7 @@ await throws('a transfer beyond the balance is refused before anything is signed
 await throws('a bad address is refused', () => w.buildEvm({ key, to: '0x1234', value: 1 }), /not a 0x address/);
 const x = await w.buildEvm({ key, to: bob, value: 250000 }); t('a transfer builds: nonce 0, gas 21000, a carrier output, a sats fee', x.nonce === 0n && x.gasLimit === 21000n && x.tx.outputs[0].value === 0 && x.tx.outputs[0].scriptPubKey.includes('65766d3a') && x.fee > 0 && x.amount === 0);
 t('the sidestr signature verifies', w.verify(x, key));
+t('the build reports what the dry run says will happen: gas used and the EVM balance after', x.gasUsed === 21000n && x.evmBefore === 5000000n * 1000000000n && x.evmAfter === (5000000n - 250000n - 21000n) * 1000000000n);
 const m2 = await deliver(x); const rc = w.evmReceipt(x.ethHash); t('mined: the receipt is in the page\'s state with status 1 and the block height', rc?.status === 1 && rc.height === m2.height && rc.sidechainTxid === x.txid);
 t('bob has 250,000 gwei; I paid 21,000 gwei of gas', (await w.evmBalance(bob)) === 250000n * 1000000000n && (await w.evmBalance(eth)) === (5000000n - 250000n - 21000n) * 1000000000n);
 await throws('a stale nonce is refused by the dry run (a validator would refuse it)', () => w.buildEvm({ key, to: bob, value: 1, nonce: 0 }), /validator would refuse/);

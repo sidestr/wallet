@@ -140,7 +140,9 @@ export class Wallet {
     const what = to === null ? `deploy a contract (${bytes.length} bytes of init code)` : value && !bytes.length ? `send ${value.toLocaleString('en-US')} gwei to ${to}` : `call ${to}${value ? ` with ${value.toLocaleString('en-US')} gwei` : ''}`;
     const b = this.build({ key, fee, carrier: { script: mod.carrierScript(rlp), note: note ?? `${what}: nonce ${n}, gas limit ${gas.toLocaleString('en-US')} at 1 gwei; the Ethereum transaction ${hash.slice(0, 14)}… rides in a sidestr transaction paid from your sats` } });
     const dry = await e.checkTx(b.tx, b.txid, { height: (this.tip?.height ?? 0) + 1, time: Math.floor(Date.now() / 1000) }); if (!dry.ok) throw new Error(`a validator would refuse it: ${dry.error}`);
-    return { ...b, ethHash: hash, from, to, value, gasLimit: gas, nonce: n, contractAddress: to === null ? this.#hexb(util.generateAddress(util.hexToBytes(from), util.bigIntToUnpaddedBytes(n))) : null };
+    // what the dry run says will happen: gas actually used, and the sender's EVM balance after (value + gas at 1 gwei); unused gas limit is not charged
+    const gasUsed = dry.gasUsed ?? gas; const evmAfter = bal - (value + gasUsed) * mod.GWEI;
+    return { ...b, ethHash: hash, from, to, value, gasLimit: gas, gasUsed, evmBefore: bal, evmAfter, withdrawal: dry.withdrawals?.[0] ?? null, nonce: n, contractAddress: to === null ? this.#hexb(util.generateAddress(util.hexToBytes(from), util.bigIntToUnpaddedBytes(n))) : null };
   }
   // a withdrawal: value to the WITHDRAW address with my sidestr script as the data; the block's coinbase pays floor(value / 1e9) sats to that script
   async buildWithdraw({ key, sats, fee = null }) { const { mod } = await this.#evmLib(); const me = this.identity(key); sats = Number(sats); if (!Number.isInteger(sats) || sats <= 0) throw new Error('a withdrawal is a whole number of sats'); return this.buildEvm({ key, to: mod.WITHDRAW, value: BigInt(sats), data: '0x' + me.script, fee, note: `withdraw ${sats.toLocaleString('en-US')} gwei from the EVM: the coinbase of the block that carries it pays ${sats.toLocaleString('en-US')} sats to ${me.address}` }); }
