@@ -121,8 +121,10 @@ export class Wallet {
   async evmCode(address) { const { e, util } = await this.#evmLib(); return this.#hexb(await e.vm.stateManager.getCode(this.#addr(address, util))); }
   // a call that changes nothing (eth_call; value in gwei): run on a checkpoint, then reverted. { ok, returnValue, gasUsed, error, createdAddress }
   async evmCall({ from = null, to = null, value = 0n, data = '0x', gasLimit = null } = {}) {
-    const { e, util, mod } = await this.#evmLib(); await e.vm.stateManager.checkpoint();
-    try { const r = await e.vm.evm.runCall({ to: to ? this.#addr(to, util) : undefined, caller: from ? this.#addr(from, util) : util.createZeroAddress(), value: BigInt(value) * mod.GWEI, data: this.#data(data), gasLimit: gasLimit ? BigInt(gasLimit) : e.gasLimit });
+    const { e, util, mod, blk } = await this.#evmLib(); await e.vm.stateManager.checkpoint();
+    // the call sees the block it would land in: the next height, now — a contract that reads block.timestamp or block.number must not see zeros
+    const block = blk.createBlock({ header: { number: BigInt((this.tip?.height ?? 0) + 1), timestamp: BigInt(Math.floor(Date.now() / 1000)), gasLimit: e.gasLimit, coinbase: util.createZeroAddress(), baseFeePerGas: mod.GWEI } }, { common: e.common });
+    try { const r = await e.vm.evm.runCall({ block, to: to ? this.#addr(to, util) : undefined, caller: from ? this.#addr(from, util) : util.createZeroAddress(), value: BigInt(value) * mod.GWEI, data: this.#data(data), gasLimit: gasLimit ? BigInt(gasLimit) : e.gasLimit });
       const x = r.execResult.exceptionError; return { ok: !x, error: x ? `${x.error}${r.execResult.returnValue?.length ? ' ' + this.#revertReason(r.execResult.returnValue) : ''}` : null, returnValue: this.#hexb(r.execResult.returnValue ?? new Uint8Array()), gasUsed: r.execResult.executionGasUsed, createdAddress: r.createdAddress ? r.createdAddress.toString() : null }; }
     finally { await e.vm.stateManager.revert(); }
   }

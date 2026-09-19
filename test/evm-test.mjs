@@ -45,6 +45,9 @@ const runtime = '602a60005260206000f3', init = '69' + runtime + '600052600a6016f
 const d = await w.buildEvm({ key, data: init }); t('a deployment builds with a predicted contract address', d.to === null && /^0x[0-9a-f]{40}$/.test(d.contractAddress) && d.gasLimit > 53000n);
 await deliver(d); t('the contract is at the predicted address with its runtime code', (await w.evmCode(d.contractAddress)) === '0x' + runtime && w.evmReceipt(d.ethHash)?.contractAddress === d.contractAddress);
 const c = await w.evmCall({ to: d.contractAddress }); t('a call (eth_call) answers 42 without changing anything', c.ok && BigInt(c.returnValue) === 42n);
+// a contract that returns block.timestamp: a read-only call must see a real clock, not zero (the faucet bug of 19 Sep)
+const tsRuntime = '425f5260205ff3', tsInit = '66' + tsRuntime + '5f5260076019f3'; const dt0 = await w.buildEvm({ key, data: tsInit }); await deliver(dt0);
+const ts = await w.evmCall({ to: dt0.contractAddress }); t('a read-only call sees the block it would land in: block.timestamp is now, not zero', ts.ok && Math.abs(Number(BigInt(ts.returnValue)) - Date.now() / 1000) < 120);
 // 4. an ERC-20: Token(name, symbol, decimals, supply) from test/fixtures
 const bin = fs.readFileSync(new URL('./fixtures/Token.bin', import.meta.url), 'utf8').trim(); const word = (h) => h.replace(/^0x/, '').padStart(64, '0'); const str = (s) => { const b = Buffer.from(s); return word(b.length.toString(16)) + b.toString('hex').padEnd(64, '0'); };
 const ctor = word('80') + word('c0') + word('2') + word((100000000n).toString(16)) + str('Shell Token') + str('SHELL'); // two dynamic strings at offsets 0x80 and 0xc0
