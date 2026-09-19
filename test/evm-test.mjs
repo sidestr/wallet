@@ -59,11 +59,16 @@ const tt = await w.buildTokenTransfer({ key, contract: dt.contractAddress, to: b
 const tb = await w.token(dt.contractAddress, bob); t('bob holds 12.5 SHELL after the transfer, with a Transfer log in the receipt', tb.balance === 1250n && (w.evmReceipt(tt.ethHash)?.logs.length === 1));
 t('an ERC-20 selector is the standard constant; any other signature is hashed by the EVM itself', (await w.selector('transfer(address,uint256)')) === '0xa9059cbb' && (await w.selector('balanceOf(address)')) === '0x70a08231' && (await w.keccak(new Uint8Array())) === '0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470');
 const rev = await w.evmCall({ to: dt.contractAddress, data: w.abi.encode('transfer(address,uint256)', bob, 10n ** 30n) }); t('a reverting call reports the revert reason', !rev.ok && /balance/.test(rev.error));
+// 4b. the faucet (test/fixtures/Faucet.sol): a first-time storage write plus a value transfer from a fresh account — the gas limit must cover what the block charges (the agent's bug of 19 Sep: a call estimate gave 56,122, the block needed 56,279)
+const df = await w.buildEvm({ key, data: fs.readFileSync(new URL('./fixtures/Faucet.bin', import.meta.url), 'utf8').trim() }); await deliver(df); await deliver(await w.buildEvm({ key, to: df.contractAddress, value: 50000 }));
+const askSel = await w.selector('ask()'); const ask = await w.buildEvm({ key, to: df.contractAddress, data: askSel }); const ma = await deliver(ask); const rca = w.evmReceipt(ask.ethHash);
+t('the faucet drip from a fresh caller succeeds: the limit from the real dry run covers a first storage write and a value transfer', rca?.status === 1 && rca.logs.length === 1 && ask.gasLimit > rca.gasUsed && ask.gasUsed === rca.gasUsed);
+const again = await w.evmCall({ from: eth, to: df.contractAddress, data: askSel }); t('asking again is refused before anything is sent, with the contract\'s reason', !again.ok && /wait/.test(again.error));
 // 5. a withdrawal: 100,000 gwei -> the coinbase pays 100,000 sats to my script
 const before = w.balance(id.script).total; const wd = await w.buildWithdraw({ key, sats: 100000 }); t('a withdrawal builds: to WITHDRAW with my 34-byte script as data', wd.to === '0x00000000000000000000000000000000000501de' && wd.value === 100000n);
 const m5 = await deliver(wd); const paid = w.coins(id.script).find((c) => c.coinbase && c.height === m5.height && c.value === 100000);
 t('the block\'s coinbase paid 100,000 sats to my script (immature, like any coinbase output)', !!paid && !paid.mature && w.evmReceipt(wd.ethHash)?.status === 1);
 // 6. activity
-const act = w.evmActivity(eth); t('the activity list has my five Ethereum transactions, newest first', act.length === 5 && act[0].transactionHash === wd.ethHash && act[4].transactionHash === x.ethHash);
+const act = w.evmActivity(eth); t('the activity list has my Ethereum transactions, newest first', act.length === 9 && act[0].transactionHash === wd.ethHash && act[act.length - 1].transactionHash === x.ethHash);
 t('the activity list of bob shows the transfer and the token transfer (by its log)', w.evmActivity(bob).length === 2);
 prod.kill(); console.log(`\n${ok} passed, ${bad} failed`); process.exit(bad ? 1 : 0);
