@@ -5,5 +5,9 @@
   "description": "the sidestr wallet library (wallet.mjs, no DOM) and page",
   "repository": "github:sidestr/wallet",
   "license": "AGPL-3.0-or-later",
-  "exports": { ".": "./wallet.mjs", "./wallet.mjs": "./wallet.mjs" }
+  "exports": {
+    ".": "./wallet.mjs",
+    "./wallet.mjs": "./wallet.mjs",
+    "./package.json": "./package.json"
+  }
 }
