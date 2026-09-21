@@ -5,7 +5,7 @@
 // to a producer; a wallet needs a mirror to read and a relay to send to, and nothing else.
 export const DEFAULTS = {
   cdn: 'https://cdn.jsdelivr.net/gh/bitcoin-desktop/schema@v0.0.27',
-  lib: 'https://cdn.jsdelivr.net/gh/sidestr/spec@244535b4321a8cff498a0897a8b961f65ab3ecd2/siding/lib',
+  lib: 'https://cdn.jsdelivr.net/gh/sidestr/spec@dbae14bfeab51f9a9f8c8a616616bfc1b35cc402/siding/lib',
   explorer: 'https://cdn.jsdelivr.net/gh/sidestr/explorer@c8bc1a084c34a26066adeb821a2baa4bbf1209d5/explorer.mjs',
   relays: ['wss://nos.lol', 'wss://relay.damus.io', 'wss://relay.primal.net', 'wss://nostr.mom', 'wss://nostr.oxtr.dev'],
 };
@@ -59,7 +59,8 @@ export class Wallet {
   }
   balance(script) { let spendable = 0, immature = 0; for (const c of this.coins(script)) { if (c.mature) spendable += c.value; else immature += c.value; } return { spendable, immature, total: spendable + immature }; }
   // where the parent's coins can be seen (a public explorer per parent network)
-  parentExplorer() { const p = this.chain.parent ?? ''; if (/testnet4/.test(p)) return 'https://mempool.guide/testnet4'; if (/mainnet/.test(p)) return 'https://mempool.guide'; return null; }
+  // the parent's family and network come from the SPEC 3.2 table (loaded with the engine), not from the id's text
+  parentExplorer() { const p = this.ex?.parent; if (!p) return null; const host = p.family === 'blake2b' ? 'https://mempool.guide' : 'https://mempool.space'; return p.mainnet ? host : `${host}/testnet4`; }
   parentTxUrl(txid) { const b = this.parentExplorer(); return b ? `${b}/tx/${txid}` : null; }
   parentAddressUrl(address) { const b = this.parentExplorer(); return b ? `${b}/address/${address}` : null; }
   // the mirror's record of paid burns: `${txid}:${vout}` -> { parentTxid, address, value, ... }
