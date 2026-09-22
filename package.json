@@ -9,5 +9,8 @@
     ".": "./wallet.mjs",
     "./wallet.mjs": "./wallet.mjs",
     "./package.json": "./package.json"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }
