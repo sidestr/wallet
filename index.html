@@ -62,7 +62,7 @@ async function boot() {
   try {
     const { openWallet, DEFAULTS } = await import('./wallet.mjs');
     relays = (LS.get('sidestr_relays') ?? DEFAULTS.relays.join(',')).split(',').map((x) => x.trim()).filter(Boolean);
-    w = await openWallet({ mirror: mirror || undefined, chain: chainId || undefined, relays, ...overrides, onProgress: (s) => { $('boot').textContent = s + '…'; } });
+    w = await openWallet({ mirror: mirror || undefined, chain: chainId || undefined, relays, store: { get: LS.get, set: LS.set, delete: LS.del }, ...overrides, onProgress: (s) => { $('boot').textContent = s + '…'; } });
     mirror = w.mirror; if (chainId) { LS.set('sidestr_chain', chainId); LS.del('sidestr_mirror'); } else LS.set('sidestr_mirror', mirror);
     key = LS.get(`sidestr_key:${w.chain.id}`); await reloadPegouts(); render();
     w.judgeMirror().then((v) => { verdict = v; if (!busy) render(); }).catch(() => {});
@@ -73,7 +73,7 @@ async function boot() {
 
 async function reloadPegouts() { if (!w) return; pegoutsPaid = await w.pegoutsPaid(); }
 function render() {
-  $('chainpill').innerHTML = `chain <b>${esc(w.chain.name)}</b>`; $('tippill').innerHTML = `height <b>${w.tip?.height ?? 0}</b>${verdict ? ` <span class="${verdict.ok === false ? 'bad' : verdict.ok ? 'good' : 'dim'}" title="${esc(verdict.note)}">${verdict.ok === false ? '⚠' : verdict.ok ? '✓' : '·'}</span>` : ''}`;
+  $('chainpill').innerHTML = `chain <b>${esc(w.chain.name)}</b>`; $('tippill').title = w.fromCache === null ? 'every block validated in this browser' : `validated from the state saved here at block ${w.fromCache}; blocks since were validated now`; $('tippill').innerHTML = `height <b>${w.tip?.height ?? 0}</b>${w.fromCache === null ? '' : ` <a href="#" id="verifyfull" class="dim" title="drop the saved state and validate every block again">⟳</a>`}${verdict ? ` <span class="${verdict.ok === false ? 'bad' : verdict.ok ? 'good' : 'dim'}" title="${esc(verdict.note)}">${verdict.ok === false ? '⚠' : verdict.ok ? '✓' : '·'}</span>` : ''}`;
   if (!key) return (app.innerHTML = `<section><h2>your key</h2><p>No key in this browser for <b>${esc(w.chain.name)}</b>. Make one, or paste one you saved.</p>
     <div class="row"><button class="ac" id="mk">make a new key</button></div>
     <div class="row" style="margin-top:.6rem"><input id="imp" class="grow mono" placeholder="64 hex characters"><button id="impgo">use this key</button></div>
@@ -213,6 +213,7 @@ async function send() {
   } catch (e) { out.innerHTML += `<div class="err">${esc(e.message)}</div>`; }
   btn.disabled = false; busy = false;
 }
+document.addEventListener('click', async (e) => { if (e.target?.id !== 'verifyfull' || !w) return; e.preventDefault(); await w.verifyFully(); location.reload(); });
 $('refresh').onclick = async () => { if (!w) return; $('refresh').disabled = true; try { await w.refresh(); await reloadPegouts(); render(); } finally { $('refresh').disabled = false; } };
 </script>
 </body>

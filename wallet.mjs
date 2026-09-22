@@ -6,14 +6,16 @@
 export const DEFAULTS = {
   cdn: 'https://cdn.jsdelivr.net/gh/bitcoin-desktop/schema@v0.0.27',
   lib: 'https://cdn.jsdelivr.net/gh/sidestr/spec@dbae14bfeab51f9a9f8c8a616616bfc1b35cc402/siding/lib',
-  explorer: 'https://cdn.jsdelivr.net/gh/sidestr/explorer@c8bc1a084c34a26066adeb821a2baa4bbf1209d5/explorer.mjs',
+  explorer: 'https://cdn.jsdelivr.net/gh/sidestr/explorer@66f54ae349fb6c96feb00b4e1d0a7b646c2d7510/explorer.mjs',
   relays: ['wss://nos.lol', 'wss://relay.damus.io', 'wss://relay.primal.net', 'wss://nostr.mom', 'wss://nostr.oxtr.dev'],
 };
 
 // Open by mirror, or by chain id alone: then the relays are asked for the signer's tip
 // announcement (kind 33333, d = chain id), which names the mirrors; the one whose chain.json
 // names the announcer as signer is taken. Either way the mirror is judged against the announcement.
-export async function openWallet({ mirror, chain, relays = DEFAULTS.relays, cdn = DEFAULTS.cdn, lib = DEFAULTS.lib, explorer = DEFAULTS.explorer, loadJson, onProgress = () => {} } = {}) {
+// `store` ({ get, set, delete } of strings, e.g. localStorage): the explorer keeps its validated state there and a later
+// open resumes from it, validating only the blocks since; `fromCache` says the height it resumed from, `verifyFully()` drops it.
+export async function openWallet({ mirror, chain, relays = DEFAULTS.relays, cdn = DEFAULTS.cdn, lib = DEFAULTS.lib, explorer = DEFAULTS.explorer, loadJson, store, onProgress = () => {} } = {}) {
   if (!mirror && !chain) throw new Error('a mirror URL or a chain id is needed');
   onProgress('loading the engine');
   const [{ Explorer }, secp, { SIGHASH_UNIFIED }, { makeSigner }, relay, address, announce, nostr] = await Promise.all([
@@ -24,8 +26,8 @@ export async function openWallet({ mirror, chain, relays = DEFAULTS.relays, cdn 
     const found = await announce.findChain({ relays, chainId: chain, verify: nostr.verifyNostrEvent }); // chain.json is always over the network, like the explorer's
     mirror = found.mirror; announced = found.tip;
   }
-  const ex = new Explorer(mirror, { cdn, sidestr: lib, ...(loadJson ? { loadJson } : {}) });
-  onProgress('reading the chain from the mirror');
+  const ex = new Explorer(mirror, { cdn, sidestr: lib, ...(loadJson ? { loadJson } : {}), ...(store ? { store } : {}) });
+  onProgress(store ? 'reading the chain from the mirror (from the last visit where possible)' : 'reading the chain from the mirror');
   await ex.open();
   if (chain && ex.chain.id !== chain) throw new Error(`the mirror serves ${ex.chain.id}, not ${chain}`);
   const signer = makeSigner({ hash: ex.hash, secp });
@@ -39,6 +41,8 @@ export class Wallet {
   get hrp() { return this.ex.chain.addressPrefix; }
   get tip() { return this.ex.tip(); }
   refresh() { return this.ex.refresh(); }
+  get fromCache() { return this.ex.fromCache; } // the height this open resumed from, or null for a full validation
+  async verifyFully() { await this.ex.clearCache(); } // the next open validates from genesis again
   // the mirror against the signer's latest announcement: { ok: true | false | null, note }
   async judgeMirror() {
     if (!this.announced) this.announced = await this.announce.fetchLatestTip({ relays: this.relays, chainId: this.chain.id, verify: this.nostr.verifyNostrEvent, signer: this.chain.signer });
