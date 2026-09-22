@@ -5,7 +5,7 @@
 // to a producer; a wallet needs a mirror to read and a relay to send to, and nothing else.
 export const DEFAULTS = {
   cdn: 'https://cdn.jsdelivr.net/gh/bitcoin-desktop/schema@v0.0.27',
-  lib: 'https://cdn.jsdelivr.net/gh/sidestr/spec@dbae14bfeab51f9a9f8c8a616616bfc1b35cc402/siding/lib',
+  lib: 'https://cdn.jsdelivr.net/gh/sidestr/spec@e457737ac3e0f674273978b653268aad45d1f73e/siding/lib',
   explorer: 'https://cdn.jsdelivr.net/gh/sidestr/explorer@66f54ae349fb6c96feb00b4e1d0a7b646c2d7510/explorer.mjs',
   relays: ['wss://nos.lol', 'wss://relay.damus.io', 'wss://relay.primal.net', 'wss://nostr.mom', 'wss://nostr.oxtr.dev'],
 };
