@@ -5,7 +5,7 @@
 // to a producer; a wallet needs a mirror to read and a relay to send to, and nothing else.
 export const DEFAULTS = {
   cdn: 'https://cdn.jsdelivr.net/gh/bitcoin-desktop/schema@v0.0.27',
-  lib: 'https://cdn.jsdelivr.net/gh/sidestr/spec@e457737ac3e0f674273978b653268aad45d1f73e/siding/lib',
+  lib: 'https://cdn.jsdelivr.net/gh/sidestr/spec@722ad42d3271efccfdfaf57c3c6943f58fc168f8/siding/lib',
   explorer: 'https://cdn.jsdelivr.net/gh/sidestr/explorer@66f54ae349fb6c96feb00b4e1d0a7b646c2d7510/explorer.mjs',
   relays: ['wss://nos.lol', 'wss://relay.damus.io', 'wss://relay.primal.net', 'wss://nostr.mom', 'wss://nostr.oxtr.dev'],
 };
@@ -18,8 +18,8 @@ export const DEFAULTS = {
 export async function openWallet({ mirror, chain, relays = DEFAULTS.relays, cdn = DEFAULTS.cdn, lib = DEFAULTS.lib, explorer = DEFAULTS.explorer, loadJson, store, onProgress = () => {} } = {}) {
   if (!mirror && !chain) throw new Error('a mirror URL or a chain id is needed');
   onProgress('loading the engine');
-  const [{ Explorer }, secp, { SIGHASH_UNIFIED }, { makeSigner }, relay, address, announce, nostr] = await Promise.all([
-    import(explorer), import(`${cdn}/codec/secp256k1.js`), import(`${cdn}/codec/interpreter.js`), import(`${lib}/schnorr.mjs`), import(`${lib}/relay.mjs`), import(`${lib}/address.mjs`), import(`${lib}/announce.mjs`), import(`${cdn}/codec/nostr.js`)]);
+  const [{ Explorer }, secp, { SIGHASH_UNIFIED }, { makeSigner }, relay, address, announce, nostr, txsign] = await Promise.all([
+    import(explorer), import(`${cdn}/codec/secp256k1.js`), import(`${cdn}/codec/interpreter.js`), import(`${lib}/schnorr.mjs`), import(`${lib}/relay.mjs`), import(`${lib}/address.mjs`), import(`${lib}/announce.mjs`), import(`${cdn}/codec/nostr.js`), import(`${lib}/txsign.mjs`)]);
   let announced = null;
   if (!mirror) {
     onProgress(`asking ${relays.length} relay(s) where ${chain} is`);
@@ -31,7 +31,7 @@ export async function openWallet({ mirror, chain, relays = DEFAULTS.relays, cdn 
   await ex.open();
   if (chain && ex.chain.id !== chain) throw new Error(`the mirror serves ${ex.chain.id}, not ${chain}`);
   const signer = makeSigner({ hash: ex.hash, secp });
-  const w = new Wallet({ ex, signer, secp, events: relay.makeEvents({ signer, hash: ex.hash }), relay, address, announce, nostr, SIGHASH_UNIFIED, mirror, relays, announced, lib, cdn, loadJson });
+  const w = new Wallet({ ex, signer, secp, events: relay.makeEvents({ signer, hash: ex.hash }), relay, address, announce, nostr, SIGHASH_UNIFIED, txsign, mirror, relays, announced, lib, cdn, loadJson });
   return w;
 }
 
@@ -76,7 +76,7 @@ export class Wallet {
     const a = this.address.decodeAddress(to); if (!a) throw new Error(`"${to}" is not an address or a script`);
     return { script: a.script, note: a.hrp === this.hrp ? null : `that address carries the prefix "${a.hrp}"; on this chain the same script is ${this.address.scriptToAddress(a.script, this.hrp)}. Its script is what is paid.` };
   }
-  // the same transaction the reference CLI makes: key-path spends, unified sighash, largest coins first
+  // the same transaction the reference CLI makes: key-path spends, the parent family's sighash, largest coins first
   get minFeeRate() { return Number(this.chain.minFeeRate ?? 1); } // sat/vB, the producer's policy, from chain.json
   vsize(tx) { return Math.ceil(this.ex.k.codec.txWeight(tx) / 4); }
   // fee null: exactly the chain's minimum for this transaction's size (key-path witnesses are 65 bytes, known before signing)
@@ -103,14 +103,14 @@ export class Wallet {
     const tx = { version: 2, inputs: picked.map((c) => ({ prevout: { txid: c.txid, vout: c.vout }, scriptSig: '', sequence: 0xfffffffd })), outputs: lay(auto ? 0 : fee), lockTime: 0, witness: [] };
     if (auto) { fee = Math.ceil(this.vsize({ ...tx, witness: tx.inputs.map(() => ['00'.repeat(65)]) }) * this.minFeeRate); tx.outputs = lay(fee); if (sum - amount - fee < 0) throw new Error(`not enough mature coins for ${amount} sats plus the ${fee}-sat minimum fee`); }
     const change = sum - amount - fee;
-    const prevouts = picked.map((c) => ({ value: c.value, scriptPubKey: me.script })); const ht = 0x01 | this.SIGHASH_UNIFIED, k = this.ex.k, h = this.ex.hash;
-    tx.witness = tx.inputs.map((_, i) => { let m = k.interpreter.sighashUnified(tx, i, prevouts, ht, 2); if (typeof m === 'string') m = h.hexToBytes(m); return [h.bytesToHex(this.signer.schnorrSign(m, key)) + ht.toString(16).padStart(2, '0')]; });
+    const prevouts = picked.map((c) => ({ value: c.value, scriptPubKey: me.script })); const k = this.ex.k;
+    this.txsign.signKeyPath({ k, hash: this.ex.hash, signer: this.signer }, tx, prevouts, key); // the sighash follows the parent's family (SPEC 3)
     return { tx, hex: k.codec.encodeHex('Transaction', tx), txid: k.codec.txid(tx), inputs: picked, amount, fee, vsize: this.vsize(tx), change, prevouts, note: dest.note };
   }
   // check our own signatures the way a validator would, before anything leaves the machine
   verify({ tx, prevouts }, key) {
-    const { pub } = this.identity(key), ht = 0x01 | this.SIGHASH_UNIFIED, k = this.ex.k, h = this.ex.hash;
-    return tx.inputs.every((_, i) => { let m = k.interpreter.sighashUnified(tx, i, prevouts, ht, 2); if (typeof m === 'string') m = h.hexToBytes(m); const w = tx.witness[i][0]; return w.endsWith(ht.toString(16).padStart(2, '0')) && this.secp.verifySchnorr(m, h.hexToBytes(w.slice(0, 128)), h.hexToBytes(pub)); });
+    const { pub } = this.identity(key);
+    return this.txsign.verifyKeyPath({ k: this.ex.k, hash: this.ex.hash, secp: this.secp }, tx, prevouts, pub);
   }
   // publish as a kind 23500 event from a throwaway key: the transaction authorises itself
   // --- EVM transactions from the page (proposals/evm.md): the same key signs an Ethereum transaction,
