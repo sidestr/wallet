@@ -10,6 +10,10 @@ export const DEFAULTS = {
   relays: ['wss://nos.lol', 'wss://relay.damus.io', 'wss://relay.primal.net', 'wss://nostr.mom', 'wss://nostr.oxtr.dev'],
 };
 
+// A browser signer (proposals/browser-signer.md): an extension beside window.nostr that signs a spend of the person's
+// own coins after checking it against the chain itself, so the page never holds the key. null when there is none.
+export const browserSigner = () => (globalThis.nostr?.sidestr?.version >= 1 ? globalThis.nostr.sidestr : null);
+
 // Open by mirror, or by chain id alone: then the relays are asked for the signer's tip
 // announcement (kind 33333, d = chain id), which names the mirrors; the one whose chain.json
 // names the announcer as signer is taken. Either way the mirror is judged against the announcement.
@@ -55,7 +59,9 @@ export class Wallet {
     } });
   }
   newKey() { return this.signer.randomKey(); }
-  identity(key) { if (!/^[0-9a-f]{64}$/i.test(key ?? '')) throw new Error('a key is 32 bytes of hex'); const pub = this.signer.pubkeyOf(key.toLowerCase()); const script = '5120' + pub; return { pub, script, address: this.address.scriptToAddress(script, this.hrp) }; }
+  identity(key) { if (!/^[0-9a-f]{64}$/i.test(key ?? '')) throw new Error('a key is 32 bytes of hex'); return this.identityOf(this.signer.pubkeyOf(key.toLowerCase())); }
+  // the same from the public key alone, for a key held elsewhere (a browser signer): the coins pay 5120 + the x-only key, untweaked
+  identityOf(pub) { if (!/^[0-9a-f]{64}$/i.test(pub ?? '')) throw new Error('a public key is 32 bytes of hex'); pub = pub.toLowerCase(); const script = '5120' + pub; return { pub, script, address: this.address.scriptToAddress(script, this.hrp) }; }
   coins(script) {
     const tip = this.tip?.height ?? 0, maturity = this.ex.k.params.coinbaseMaturity; const out = [];
     for (const [key, c] of this.ex.utxo) if (c.output.scriptPubKey === script) out.push({ outpoint: key, txid: c.outpoint.txid, vout: c.outpoint.vout, value: c.output.value, height: c.height, coinbase: c.coinbase, mature: !c.coinbase || tip + 1 - c.height >= maturity, maturesAt: c.coinbase ? c.height + maturity - 1 : null });
@@ -89,9 +95,10 @@ export class Wallet {
   evmDepositOutputs(address, amount) { const enc = new TextEncoder(); const b = new Uint8Array([...enc.encode('evmin:'), ...Uint8Array.from(address.slice(2).match(/../g), (x) => parseInt(x, 16))]); return [{ value: amount, scriptPubKey: (this.chain.evm?.reserve ?? this.chain.challenge).toLowerCase() }, { value: 0, scriptPubKey: '6a' + b.length.toString(16).padStart(2, '0') + Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('') }]; }
   // the burn output for a parent address or script (SPEC 7): OP_RETURN `pegout:<script>`
   pegoutScript(to) { const enc = new TextEncoder().encode(`pegout:${this.resolveTo(to).script}`); return '6a' + enc.length.toString(16).padStart(2, '0') + Array.from(enc, (b) => b.toString(16).padStart(2, '0')).join(''); }
-  // pegout: `to` is a parent address; the amount burns here and the peg holders owe it there
-  build({ key, to, amount, fee = null, pegout = false, evmDeposit = false, carrier = null }) {
-    const me = this.identity(key); amount = carrier ? 0 : Number(amount);
+  // pegout: `to` is a parent address; the amount burns here and the peg holders owe it there. With `pub` in place of `key`
+  // the transaction comes back unsigned (`unsigned: true`), laid out and fee'd exactly as a signed one, for signWith()
+  build({ key, pub = null, to, amount, fee = null, pegout = false, evmDeposit = false, carrier = null }) {
+    const me = key ? this.identity(key) : this.identityOf(pub); amount = carrier ? 0 : Number(amount);
     if (evmDeposit && !/^0x[0-9a-fA-F]{40}$/.test(String(to).trim())) throw new Error('a deposit goes to a 0x address'); const auto = fee == null || fee === '' || fee === 'auto'; fee = auto ? null : Number(fee);
     if (!Number.isInteger(amount) || amount < 0 || (amount === 0 && !carrier)) throw new Error('the amount is a whole number of sats'); if (!auto && (!Number.isInteger(fee) || fee < 0)) throw new Error('bad fee');
     if (pegout && amount < this.pegoutMin) throw new Error(`a peg-out burns at least ${this.pegoutMin.toLocaleString('en-US')} sats`);
@@ -104,8 +111,20 @@ export class Wallet {
     if (auto) { fee = Math.ceil(this.vsize({ ...tx, witness: tx.inputs.map(() => ['00'.repeat(65)]) }) * this.minFeeRate); tx.outputs = lay(fee); if (sum - amount - fee < 0) throw new Error(`not enough mature coins for ${amount} sats plus the ${fee}-sat minimum fee`); }
     const change = sum - amount - fee;
     const prevouts = picked.map((c) => ({ value: c.value, scriptPubKey: me.script })); const k = this.ex.k;
-    this.txsign.signKeyPath({ k, hash: this.ex.hash, signer: this.signer }, tx, prevouts, key); // the sighash follows the parent's family (SPEC 3)
-    return { tx, hex: k.codec.encodeHex('Transaction', tx), txid: k.codec.txid(tx), inputs: picked, amount, fee, vsize: this.vsize(tx), change, prevouts, note: dest.note };
+    if (key) this.txsign.signKeyPath({ k, hash: this.ex.hash, signer: this.signer }, tx, prevouts, key); // the sighash follows the parent's family (SPEC 3)
+    const vsize = this.vsize(key ? tx : { ...tx, witness: tx.inputs.map(() => ['00'.repeat(65)]) }); // unsigned: the size it will have
+    return { tx, hex: k.codec.encodeHex('Transaction', tx), txid: k.codec.txid(tx), inputs: picked, amount, fee, vsize, change, prevouts, note: dest.note, pub: me.pub, unsigned: !key };
+  }
+  // an unsigned build signed by a browser signer: it resolves the chain itself, shows the spend in its own window and
+  // signs only its own coins; its answer is held to what was built (same txid) and to a validator's check of every
+  // signature before anything leaves. The signer's refusals reject with its `code` (rejected, unsupported, not-yours, ...)
+  async signWith(signer, b) {
+    if (!signer?.signTransaction) throw new Error('no browser signer'); const k = this.ex.k;
+    const r = await signer.signTransaction({ chain: this.chain.id, tx: b.hex }); let tx;
+    try { tx = k.codec.decode('Transaction', String(r?.tx ?? '')); } catch { throw new Error('the signer answered with something that is not a transaction; nothing was sent'); }
+    if (k.codec.txid(tx) !== b.txid) throw new Error('the signer returned a different transaction; nothing was sent');
+    if (!this.txsign.verifyKeyPath({ k, hash: this.ex.hash, secp: this.secp }, tx, b.prevouts, b.pub)) throw new Error('the signer\'s signatures did not verify; nothing was sent');
+    return { ...b, tx, hex: k.codec.encodeHex('Transaction', tx), vsize: this.vsize(tx), unsigned: false };
   }
   // check our own signatures the way a validator would, before anything leaves the machine
   verify({ tx, prevouts }, key) {
@@ -136,6 +155,8 @@ export class Wallet {
   #revertReason(rv) { const h = this.#hexb(rv); if (h.startsWith('0x08c379a0') && rv.length >= 68) { try { return `"${this.abi.decodeString('0x' + h.slice(10))}"`; } catch {} } return h.length > 2 ? h.slice(0, 20) + '…' : ''; }
   // the producer's estimate, so a page and the RPC agree: intrinsic gas + calldata + execution with a fifth of headroom
   async evmEstimate(call) { const r = await this.evmCall(call); if (!r.ok) throw new Error(`the call reverts: ${r.error}`); const d = this.#data(call.data); const calldata = [...d].reduce((a, b) => a + (b === 0 ? 4 : 16), 0); return 21000n + (call.to ? 0n : 32000n) + BigInt(calldata) + r.gasUsed * 12n / 10n; }
+  // a browser signer signs sidestr key-path spends only: an Ethereum transaction, a peg-in (a parent transaction) and a
+  // pledge are other signatures, so the EVM, the bridge's parent side and the desk keep needing the key in the page
   // sign an Ethereum transaction with my key (value in gwei = sats), carry it in a sidestr transaction from my mature coins, and dry-run the whole thing on this page's state
   async buildEvm({ key, to = null, value = 0, data = '0x', gasLimit = null, nonce = null, fee = null, note = null }) {
     const { e, util, tx: T, mod } = await this.#evmLib(); const priv = util.hexToBytes('0x' + key.toLowerCase()); const from = this.ethAddress(key);
