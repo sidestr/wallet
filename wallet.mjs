@@ -5,7 +5,7 @@
 // to a producer; a wallet needs a mirror to read and a relay to send to, and nothing else.
 export const DEFAULTS = {
   cdn: 'https://cdn.jsdelivr.net/gh/bitcoin-desktop/schema@v0.0.27',
-  lib: 'https://cdn.jsdelivr.net/gh/sidestr/spec@722ad42d3271efccfdfaf57c3c6943f58fc168f8/siding/lib',
+  lib: 'https://cdn.jsdelivr.net/gh/sidestr/spec@e6e04d7d023f99888d37b402dd2ffc7042f9d2ce/siding/lib',
   explorer: 'https://cdn.jsdelivr.net/gh/sidestr/explorer@2741bb495e138923b0e1de12aacef06ee6ca0387/explorer.mjs',
   relays: ['wss://nos.lol', 'wss://relay.damus.io', 'wss://relay.primal.net', 'wss://nostr.mom', 'wss://nostr.oxtr.dev'],
 };
@@ -188,6 +188,30 @@ export class Wallet {
   // amount as a decimal string in the token's units -> raw integer
   tokenAmount(text, decimals) { const m = /^(\d*)(?:\.(\d*))?$/.exec(String(text).trim()); if (!m || (!m[1] && !m[2])) throw new Error('the amount is a decimal number'); const frac = (m[2] ?? '').padEnd(decimals, '0'); if (frac.length > decimals) throw new Error(`at most ${decimals} decimals`); return BigInt((m[1] || '0') + frac); }
   async buildTokenTransfer({ key, contract, to, amount, fee = null }) { const { util } = await this.#evmLib(); this.#addr(to, util); const t = await this.token(contract, this.ethAddress(key)); const raw = this.tokenAmount(amount, t.decimals); if (t.balance < raw) throw new Error(`you hold ${t.format(t.balance)} ${t.symbol ?? 'tokens'}`); return this.buildEvm({ key, to: contract, data: this.abi.encode('transfer(address,uint256)', to, raw), fee, note: `send ${t.format(raw)} ${t.symbol ?? 'tokens'} to ${to}: a call to ${contract}` }); }
+  // --- the bridge, parent side (SPEC 6): a peg-in built and signed here from this key's coins on the parent ---------
+  get parentHrp() { return this.ex.parent?.mainnet ? 'bc' : 'tb'; }
+  parentAddress(key) { return this.address.scriptToAddress(this.identity(key).script, this.parentHrp); } // the same key, the parent's prefix
+  parentApi() { const b = this.parentExplorer(); return b ? `${b}/api` : null; }
+  // the script a peg-in pays, from the signer's newest announcement (the `peg` tag)
+  async pegInScript() { if (!this.announced) await this.judgeMirror().catch(() => {}); const p = this.announced?.pegScript ?? null; if (!p) throw new Error(`${this.chain.id} announces no peg script yet: its producer predates 0.0.4 or has no peg wallet`); return p; }
+  async parentUtxos(address) { const api = this.parentApi(); if (!api) throw new Error('no public explorer for this parent'); const r = await fetch(`${api}/address/${address}/utxo`, { cache: 'no-store' }); if (!r.ok) throw new Error(`the parent explorer answered ${r.status}`); return (await r.json()).map((u) => ({ txid: u.txid, vout: u.vout, value: Number(u.value), confirmed: !!u.status?.confirmed, height: u.status?.block_height ?? null })); }
+  // inputs: this key's confirmed parent coins (largest first); outputs: the peg, the marker naming this key's script on the chain, change
+  async buildPegIn({ key, amount, feeRate = 2, utxos = null, pegScript = null }) {
+    amount = Number(amount); if (!Number.isInteger(amount) || amount <= 0) throw new Error('the amount is a whole number of sats');
+    const k = await this.#parentKernel(); const { markerScript } = await import(`${this.lib}/pledge.mjs`); const txsign = this.txsign; const me = this.identity(key); const from = me.script; // same script on both chains
+    const peg = (pegScript ?? await this.pegInScript()).toLowerCase(); const marker = markerScript(this.chain.id, me.script);
+    const coins = (utxos ?? await this.parentUtxos(this.parentAddress(key))).filter((u) => u.confirmed !== false).sort((a, b) => b.value - a.value);
+    const picked = []; let sum = 0; const need = (fee) => amount + fee; const size = (n, change) => 11 + n * 58 + 43 + (9 + marker.length / 2) + (change ? 43 : 0); // vbytes: key-path taproot inputs, taproot outputs, the marker
+    let fee = 0; for (const c of coins) { picked.push(c); sum += c.value; fee = Math.ceil(size(picked.length, true) * feeRate); if (sum >= need(fee)) break; }
+    if (sum < need(fee)) throw new Error(`not enough confirmed coins at ${this.parentAddress(key)} on ${this.chain.parent}: ${sum.toLocaleString('en-US')} sats, ${need(fee).toLocaleString('en-US')} needed`);
+    let change = sum - amount - fee; if (change > 0 && change < 330) { fee += change; change = 0; }
+    const tx = { version: 2, inputs: picked.map((c) => ({ prevout: { txid: c.txid, vout: c.vout }, scriptSig: '', sequence: 0xfffffffd })), outputs: [{ value: amount, scriptPubKey: peg }, { value: 0, scriptPubKey: marker }, ...(change > 0 ? [{ value: change, scriptPubKey: from }] : [])], lockTime: 0, witness: [] };
+    const prevouts = picked.map((c) => ({ value: c.value, scriptPubKey: from })); txsign.signKeyPath({ k, hash: this.ex.hash, signer: this.signer }, tx, prevouts, key);
+    if (!txsign.verifyKeyPath({ k, hash: this.ex.hash, secp: this.secp }, tx, prevouts, me.pub)) throw new Error('the parent signature did not verify; nothing was sent');
+    return { tx, hex: k.codec.encodeHex('Transaction', tx), txid: k.codec.txid(tx), inputs: picked, amount, fee, change, pegScript: peg, pegAddress: this.address.scriptToAddress(peg, this.parentHrp), marker, from: this.parentAddress(key), to: me.address, vsize: Math.ceil(k.codec.txWeight(tx) / 4), note: `peg in ${amount.toLocaleString('en-US')} sats from ${this.chain.parent}: claimed on ${this.chain.name} after ${this.chain.pegConfirmations ?? 6} confirmations, spendable ${this.ex.k.params.coinbaseMaturity} blocks later` };
+  }
+  // broadcast on the parent through its public explorer; returns the txid the explorer reports
+  async publishParent(hex) { const api = this.parentApi(); if (!api) throw new Error('no public explorer for this parent'); const r = await fetch(`${api}/tx`, { method: 'POST', body: hex }); const text = await r.text(); if (!r.ok) throw new Error(`the parent explorer refused it: ${text.slice(0, 160)}`); return text.trim(); }
   // --- the desk (SPEC 6.2): locked parent rewards pledged for sats now ---------------------
   get desk() { return this.chain.pledge ?? null; }
   // my locked rewards as the desk has seen them, with whether each is pledged already
