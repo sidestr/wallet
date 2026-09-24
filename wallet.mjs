@@ -6,7 +6,7 @@
 export const DEFAULTS = {
   cdn: 'https://cdn.jsdelivr.net/gh/bitcoin-desktop/schema@v0.0.27',
   lib: 'https://cdn.jsdelivr.net/gh/sidestr/spec@722ad42d3271efccfdfaf57c3c6943f58fc168f8/siding/lib',
-  explorer: 'https://cdn.jsdelivr.net/gh/sidestr/explorer@0d58ad9dbe33d7245726e54246696f8f3aa2b259/explorer.mjs',
+  explorer: 'https://cdn.jsdelivr.net/gh/sidestr/explorer@2741bb495e138923b0e1de12aacef06ee6ca0387/explorer.mjs',
   relays: ['wss://nos.lol', 'wss://relay.damus.io', 'wss://relay.primal.net', 'wss://nostr.mom', 'wss://nostr.oxtr.dev'],
 };
 
