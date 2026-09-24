@@ -5,7 +5,7 @@
 // to a producer; a wallet needs a mirror to read and a relay to send to, and nothing else.
 export const DEFAULTS = {
   cdn: 'https://cdn.jsdelivr.net/gh/bitcoin-desktop/schema@v0.0.27',
-  lib: 'https://cdn.jsdelivr.net/gh/sidestr/spec@e6e04d7d023f99888d37b402dd2ffc7042f9d2ce/siding/lib',
+  lib: 'https://cdn.jsdelivr.net/gh/sidestr/spec@373d3eb6accd163f418e8a813052f1516a942bb3/siding/lib',
   explorer: 'https://cdn.jsdelivr.net/gh/sidestr/explorer@2741bb495e138923b0e1de12aacef06ee6ca0387/explorer.mjs',
   relays: ['wss://nos.lol', 'wss://relay.damus.io', 'wss://relay.primal.net', 'wss://nostr.mom', 'wss://nostr.oxtr.dev'],
 };
@@ -211,7 +211,14 @@ export class Wallet {
     return { tx, hex: k.codec.encodeHex('Transaction', tx), txid: k.codec.txid(tx), inputs: picked, amount, fee, change, pegScript: peg, pegAddress: this.address.scriptToAddress(peg, this.parentHrp), marker, from: this.parentAddress(key), to: me.address, vsize: Math.ceil(k.codec.txWeight(tx) / 4), note: `peg in ${amount.toLocaleString('en-US')} sats from ${this.chain.parent}: claimed on ${this.chain.name} after ${this.chain.pegConfirmations ?? 6} confirmations, spendable ${this.ex.k.params.coinbaseMaturity} blocks later` };
   }
   // broadcast on the parent through its public explorer; returns the txid the explorer reports
-  async publishParent(hex) { const api = this.parentApi(); if (!api) throw new Error('no public explorer for this parent'); const r = await fetch(`${api}/tx`, { method: 'POST', body: hex }); const text = await r.text(); if (!r.ok) throw new Error(`the parent explorer refused it: ${text.slice(0, 160)}`); return text.trim(); }
+  // broadcast on the parent: the public explorer first; if it will not, a kind 23503 event to the relays, which a producer
+  // with a node broadcasts only if that node's own policy accepts it (SPEC 11). Returns { txid, via, note }.
+  async publishParent(hex, relays = this.relays) {
+    const k = await this.#parentKernel(); const txid = k.codec.txid(k.codec.decode('Transaction', hex)); const api = this.parentApi(); let note = null;
+    if (api) { try { const r = await fetch(`${api}/tx`, { method: 'POST', body: hex }); const text = await r.text(); if (r.ok) return { txid: text.trim() || txid, via: 'explorer', note: null }; note = `the parent explorer refused it: ${text.slice(0, 120)}`; } catch (e) { note = `the parent explorer did not answer: ${e.message}`; } }
+    const ev = this.events.parentTxEvent(this.signer.randomKey(), this.chain.id, hex); const results = await this.relay.publish({ relays, event: ev }); if (!Object.values(results).some((r) => r === 'ok')) throw new Error(`${note ? note + '; ' : ''}no relay accepted the event either`);
+    return { txid, via: 'relay', event: ev.id, note: `${note ? note + '; ' : ''}sent to the relays for a producer's node to broadcast if its policy accepts it` };
+  }
   // --- the desk (SPEC 6.2): locked parent rewards pledged for sats now ---------------------
   get desk() { return this.chain.pledge ?? null; }
   // my locked rewards as the desk has seen them, with whether each is pledged already
