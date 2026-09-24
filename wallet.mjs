@@ -193,7 +193,7 @@ export class Wallet {
   parentAddress(key) { return this.address.scriptToAddress(this.identity(key).script, this.parentHrp); } // the same key, the parent's prefix
   parentApi() { const b = this.parentExplorer(); return b ? `${b}/api` : null; }
   // the script a peg-in pays, from the signer's newest announcement (the `peg` tag)
-  async pegInScript() { if (!this.announced) await this.judgeMirror().catch(() => {}); const p = this.announced?.pegScript ?? null; if (!p) throw new Error(`${this.chain.id} announces no peg script yet: its producer predates 0.0.4 or has no peg wallet`); return p; }
+  async pegInScript() { if (!this.announced?.pegScript) { try { this.announced = await this.announce.fetchLatestTip({ relays: this.relays, chainId: this.chain.id, verify: this.nostr.verifyNostrEvent, signer: this.chain.signer }); } catch {} } const p = this.announced?.pegScript ?? null; if (!p) throw new Error(`${this.chain.id} announces no peg script yet: its producer predates 0.0.4 or has no peg wallet`); return p; }
   async parentUtxos(address) { const api = this.parentApi(); if (!api) throw new Error('no public explorer for this parent'); const r = await fetch(`${api}/address/${address}/utxo`, { cache: 'no-store' }); if (!r.ok) throw new Error(`the parent explorer answered ${r.status}`); return (await r.json()).map((u) => ({ txid: u.txid, vout: u.vout, value: Number(u.value), confirmed: !!u.status?.confirmed, height: u.status?.block_height ?? null })); }
   // inputs: this key's confirmed parent coins (largest first); outputs: the peg, the marker naming this key's script on the chain, change
   async buildPegIn({ key, amount, feeRate = 2, utxos = null, pegScript = null }) {
