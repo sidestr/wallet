@@ -1,6 +1,6 @@
 {
   "name": "@sidestr/wallet",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "type": "module",
   "description": "the sidestr wallet library (wallet.mjs, no DOM) and page",
   "repository": "github:sidestr/wallet",
@@ -12,5 +12,8 @@
   },
   "publishConfig": {
     "access": "public"
+  },
+  "scripts": {
+    "test": "node test/evm-test.mjs && node test/pegin-test.mjs"
   }
 }
