@@ -5,7 +5,7 @@
 // to a producer; a wallet needs a mirror to read and a relay to send to, and nothing else.
 export const DEFAULTS = {
   cdn: 'https://cdn.jsdelivr.net/gh/bitcoin-desktop/schema@v0.0.27',
-  lib: 'https://cdn.jsdelivr.net/gh/sidestr/spec@fa86dac83d47b8f70195132e91e9dc083e1d9228/siding/lib',
+  lib: 'https://cdn.jsdelivr.net/gh/sidestr/spec@b0507b488b2e738156713f293765442a2a727cfe/siding/lib',
   explorer: 'https://cdn.jsdelivr.net/gh/sidestr/explorer@2741bb495e138923b0e1de12aacef06ee6ca0387/explorer.mjs',
   relays: ['wss://nos.lol', 'wss://relay.damus.io', 'wss://relay.primal.net', 'wss://nostr.mom', 'wss://nostr.oxtr.dev'],
 };
@@ -55,7 +55,7 @@ export class Wallet {
   // the signer's announcements as they come: onTip({ tip, ... }) for each newer one; returns { close() }
   followTips(onTip, relays = this.relays) {
     return this.relay.subscribe({ relays, chainId: this.chain.id, verify: this.nostr.verifyNostrEvent, kind: this.announce.TIP_KIND, tag: 'd', since: 60, onEvent: (ev) => {
-      const t = this.announce.parseTip(ev); if (!t || t.pubkey !== this.chain.signer || (this.announced && t.tip <= this.announced.tip)) return; this.announced = t; onTip(t);
+      const t = this.announce.parseTip(ev); if (!t || !this.announce.announcedBy(this.chain, t.pubkey) || (this.announced && t.tip <= this.announced.tip)) return; this.announced = t; onTip(t);
     } });
   }
   newKey() { return this.signer.randomKey(); }
