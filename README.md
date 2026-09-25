@@ -12,3 +12,13 @@ jsdelivr; `?lib=`, `?cdn=` and `?explorer=` override them for development.
 it against a live chain: identity, coins and maturity, a real signed spend checked with the
 curve's verifier, codec round-trip, address handling; `--send` publishes it and waits for the
 mirror. Keys are stored unencrypted in the browser, as the BLAKE wallet does: small amounts.
+
+## Signing with a browser signer
+
+With an extension that offers `window.nostr.sidestr` ([proposals/browser-signer.md](https://github.com/sidestr/spec/blob/gh-pages/proposals/browser-signer.md);
+Podkey is the reference), the page offers "use my extension's key": it stores only the public key, builds each spend
+unsigned (`build({ pub, ... })`, same layout and fee as a signed one), and `signWith(browserSigner(), built)` hands it to the
+extension, which resolves the chain itself, shows the spend in its own window and signs only its own coins. The answer is
+held to the txid that was built and to a validator's check of every signature before it is published, from a throwaway
+event key as always. The EVM, peg-ins and the desk sign other things (an Ethereum transaction, a parent transaction) and
+still need the key in the page. `node test/signer-test.mjs` checks the round trip against a stand-in signer.
