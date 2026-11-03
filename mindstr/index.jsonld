@@ -1,0 +1,259 @@
+{
+  "@context": {
+    "@vocab": "https://mindstr.org/ns#",
+    "link": {
+      "@type": "@id"
+    },
+    "parent": {
+      "@type": "@id"
+    }
+  },
+  "version": "0.2",
+  "nodes": [
+    {
+      "@id": "#this",
+      "name": "wallet",
+      "x": 0,
+      "y": 0,
+      "link": "https://github.com/sidestr/wallet",
+      "bgColor": "#ebc573"
+    },
+    {
+      "@id": "#ab9ysn",
+      "name": "README",
+      "x": 200,
+      "y": -128,
+      "link": "https://github.com/sidestr/wallet/blob/gh-pages/README.md#sidestr-wallet",
+      "bgColor": "#acd5ff",
+      "parent": "#this"
+    },
+    {
+      "@id": "#qhtzie",
+      "name": "Signing with a browser signer",
+      "x": 400,
+      "y": -255,
+      "link": "https://github.com/sidestr/wallet/blob/gh-pages/README.md#signing-with-a-browser-signer",
+      "bgColor": "#daeeff",
+      "parent": "#ab9ysn"
+    },
+    {
+      "@id": "#2sgmjt",
+      "name": "Source · 1 files",
+      "x": 239,
+      "y": 63,
+      "link": "https://github.com/sidestr/wallet/tree/gh-pages",
+      "bgColor": "#f3bee1",
+      "parent": "#this"
+    },
+    {
+      "@id": "#j9h6ge",
+      "name": "wallet.mjs · 4",
+      "x": 478,
+      "y": 126,
+      "link": "https://github.com/sidestr/wallet/blob/gh-pages/wallet.mjs",
+      "bgColor": "#fce3f3",
+      "parent": "#2sgmjt"
+    },
+    {
+      "@id": "#ejt2c7",
+      "name": "DEFAULTS()",
+      "x": 750,
+      "y": 9,
+      "link": "https://github.com/sidestr/wallet/blob/gh-pages/wallet.mjs",
+      "bgColor": "#fce3f3",
+      "parent": "#j9h6ge"
+    },
+    {
+      "@id": "#tvx8v7",
+      "name": "browserSigner()",
+      "x": 822,
+      "y": 145,
+      "link": "https://github.com/sidestr/wallet/blob/gh-pages/wallet.mjs",
+      "bgColor": "#fce3f3",
+      "parent": "#j9h6ge"
+    },
+    {
+      "@id": "#4bfmpa",
+      "name": "openWallet()",
+      "x": 692,
+      "y": 246,
+      "link": "https://github.com/sidestr/wallet/blob/gh-pages/wallet.mjs",
+      "bgColor": "#fce3f3",
+      "parent": "#j9h6ge"
+    },
+    {
+      "@id": "#c2mpq8",
+      "name": "Wallet()",
+      "x": 700,
+      "y": 395,
+      "link": "https://github.com/sidestr/wallet/blob/gh-pages/wallet.mjs",
+      "bgColor": "#fce3f3",
+      "parent": "#j9h6ge"
+    },
+    {
+      "@id": "#yykmee",
+      "name": "Open issues · 6",
+      "x": -217,
+      "y": 105,
+      "link": "https://github.com/sidestr/wallet/issues",
+      "bgColor": "#f1c99c",
+      "parent": "#this"
+    },
+    {
+      "@id": "#7kgwkb",
+      "name": "#6 evmActivity matches any topic endin…",
+      "x": 96,
+      "y": 417,
+      "link": "https://github.com/sidestr/wallet/issues/6",
+      "bgColor": "#fbe8d3",
+      "parent": "#yykmee"
+    },
+    {
+      "@id": "#x7t4w7",
+      "name": "#5 keccak() hashes the ASCII of a hex…",
+      "x": -175,
+      "y": 479,
+      "link": "https://github.com/sidestr/wallet/issues/5",
+      "bgColor": "#fbe8d3",
+      "parent": "#yykmee"
+    },
+    {
+      "@id": "#dsw684",
+      "name": "#4 No way to read a contract's events:…",
+      "x": -358,
+      "y": 297,
+      "link": "https://github.com/sidestr/wallet/issues/4",
+      "bgColor": "#fbe8d3",
+      "parent": "#yykmee"
+    },
+    {
+      "@id": "#v88t4a",
+      "name": "#3 No ABI coder beyond ERC-20 words: e…",
+      "x": -568,
+      "y": 135,
+      "link": "https://github.com/sidestr/wallet/issues/3",
+      "bgColor": "#fbe8d3",
+      "parent": "#yykmee"
+    },
+    {
+      "@id": "#skzt29",
+      "name": "#2 buildEvm can return a transaction t…",
+      "x": -487,
+      "y": -96,
+      "link": "https://github.com/sidestr/wallet/issues/2",
+      "bgColor": "#fbe8d3",
+      "parent": "#yykmee"
+    },
+    {
+      "@id": "#t4pwzt",
+      "name": "#1 Refactor notes from packaging (side…",
+      "x": -440,
+      "y": -334,
+      "link": "https://github.com/sidestr/wallet/issues/1",
+      "bgColor": "#fbe8d3",
+      "parent": "#yykmee"
+    },
+    {
+      "@id": "#jhaa84",
+      "name": "A wallet for a sidestr chain: keys in your browser, the…",
+      "x": 27,
+      "y": -211,
+      "link": "https://github.com/sidestr/wallet",
+      "bgColor": "#ececec",
+      "parent": "#this"
+    },
+    {
+      "@id": "#wavvy9",
+      "name": "since Sep 2026 · last 27 Sep 2026",
+      "x": -13,
+      "y": -425,
+      "link": "https://github.com/sidestr/wallet/commits/gh-pages",
+      "bgColor": "#ececec",
+      "parent": "#jhaa84"
+    },
+    {
+      "@id": "#i9w3v4",
+      "name": "sidestr.com/wallet",
+      "x": 187,
+      "y": -476,
+      "link": "http://sidestr.com/wallet/",
+      "bgColor": "#ececec",
+      "parent": "#jhaa84"
+    }
+  ],
+  "connections": [
+    {
+      "start": 0,
+      "end": 1
+    },
+    {
+      "start": 1,
+      "end": 2
+    },
+    {
+      "start": 0,
+      "end": 3
+    },
+    {
+      "start": 3,
+      "end": 4
+    },
+    {
+      "start": 4,
+      "end": 5
+    },
+    {
+      "start": 4,
+      "end": 6
+    },
+    {
+      "start": 4,
+      "end": 7
+    },
+    {
+      "start": 4,
+      "end": 8
+    },
+    {
+      "start": 0,
+      "end": 9
+    },
+    {
+      "start": 9,
+      "end": 10
+    },
+    {
+      "start": 9,
+      "end": 11
+    },
+    {
+      "start": 9,
+      "end": 12
+    },
+    {
+      "start": 9,
+      "end": 13
+    },
+    {
+      "start": 9,
+      "end": 14
+    },
+    {
+      "start": 9,
+      "end": 15
+    },
+    {
+      "start": 0,
+      "end": 16
+    },
+    {
+      "start": 16,
+      "end": 17
+    },
+    {
+      "start": 16,
+      "end": 18
+    }
+  ],
+  "selectedNode": 0
+}

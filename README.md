@@ -1,5 +1,7 @@
 # sidestr wallet
 
+[![Mind map](https://mindstr.org/badge.svg)](https://mindstr.org/?uri=https://sidestr.com/wallet/mindstr/index.jsonld)
+
 A wallet for a sidestr chain that needs nothing of the chain's producer: it reads and validates
 the chain from a **mirror** (the same `chain.json`, `blocks.json`, `blocks.dat` the explorer
 uses), keeps your key in the browser, signs spends in the page, and sends them to a **Nostr
